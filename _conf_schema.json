@@ -1,0 +1,74 @@
+{
+  "admin_only": {
+    "description": "仅管理员可查询",
+    "type": "bool",
+    "default": true,
+    "hint": "查询的是已配置账号的额度和余额。关闭后所有能够唤醒机器人的用户都可查询。"
+  },
+  "natural_language_enabled": {
+    "description": "启用自然语言查询",
+    "type": "bool",
+    "default": true,
+    "hint": "强唤醒词或 @ 机器人后说“帮我查一下额度”。私聊遵循 AstrBot 自身唤醒设置。"
+  },
+  "codex_path": {
+    "description": "Codex 程序路径",
+    "type": "string",
+    "default": "codex",
+    "hint": "默认从 PATH 查找。Windows 支持识别官方 npm 安装布局，也可填写原生 codex.exe 的完整路径。只填路径，不填命令参数。"
+  },
+  "codex_home": {
+    "description": "Codex 用户数据目录",
+    "type": "string",
+    "default": "",
+    "hint": "留空继承运行环境；通常为当前用户的 .codex。可填写 C:\\Users\\你的用户名\\.codex。仅适用于 AstrBot 能访问此目录及相应登录凭据的部署。"
+  },
+  "deepseek_provider_id": {
+    "description": "DeepSeek 官方提供商 ID",
+    "type": "string",
+    "default": "",
+    "hint": "留空优先使用当前会话的官方 DeepSeek 提供商，否则使用唯一的官方 DeepSeek 提供商。存在多个候选时须指定 ID。复用其 API Key，不需重复填写。"
+  },
+  "query_timeout_seconds": {
+    "description": "查询超时（秒）",
+    "type": "int",
+    "default": 20,
+    "hint": "有效范围 3–120 秒。汇总时两个来源并发查询、独立显示结果。"
+  },
+  "deepseek_low_balance_reply": {
+    "description": "DeepSeek 余额不足提醒文案",
+    "type": "string",
+    "default": "该充蓝色大肥鱼了喵，要吃不起白饭了。",
+    "hint": "人民币总余额不足 10 元时追加。可修改；留空不显示这条提醒文字，图片仍遵循图片开关。"
+  },
+  "codex_weekly_reset_reply": {
+    "description": "Codex 周额度即将重置提醒文案",
+    "type": "string",
+    "default": "要重置了，快蹬喵",
+    "hint": "周剩余额度超过 50% 且距离周重置不足 2 天时追加。可修改；留空隐藏文字。"
+  },
+  "codex_card_expiry_reply": {
+    "description": "Codex 重置卡即将过期提醒文案",
+    "type": "string",
+    "default": "重置卡要过期了，快蹬喵",
+    "hint": "有可用重置卡在未来不足 2 天内过期时追加。可修改；留空隐藏文字。"
+  },
+  "reminder_image_enabled": {
+    "description": "提醒时附带图片",
+    "type": "bool",
+    "default": true,
+    "hint": "任意提醒条件触发时，在同一条结果中附加一张图片。普通查询、查询错误和权限不足不附图。"
+  },
+  "reminder_image_path": {
+    "description": "提醒图片路径或 URL",
+    "type": "string",
+    "default": "",
+    "hint": "留空使用插件内置附件图片。可填写本地绝对路径、相对插件目录的路径或 http/https 图片 URL。图片不存在时仅发送文字；网络图片须能被运行环境或消息平台读取。"
+  },
+  "cache_seconds": {
+    "description": "缓存时长（秒）",
+    "type": "int",
+    "default": 30,
+    "hint": "有效范围 0–300 秒，0 表示不缓存。回复附数据查询时间；失败最多缓存 5 秒。"
+  }
+}
