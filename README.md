@@ -18,7 +18,7 @@ https://github.com/zsmkmojang-a11y/astrbot-plugin-account-quota
 
 ### 本地安装
 
-在 AstrBot 插件管理页上传 `astrbot_plugin_account_quota.zip`；也可以将仓库内容放入 AstrBot 的 `data/plugins/astrbot_plugin_account_quota/` 目录，保证该目录直接包含 `main.py` 和 `metadata.yaml`。
+在仓库页面通过 **Code → Download ZIP** 下载，或使用提供的 `astrbot_plugin_account_quota.zip`，然后在 AstrBot 插件管理页上传 ZIP；也可以将仓库内容放入 AstrBot 的 `data/plugins/astrbot_plugin_account_quota/` 目录，保证该目录直接包含 `main.py` 和 `metadata.yaml`。
 
 安装后重新加载插件，在 AstrBot 中将自己的平台用户 ID 配置为管理员，默认仅管理员可以查询。
 
@@ -73,7 +73,7 @@ Docker 容器不能直接执行宿主机的 Windows `codex.exe`，也不会自�
 
 ## 提醒图片与文案
 
-`v1.1.0` 默认在触发任意提醒时，在同一条结果中附加一张图片。默认图片是用户提供的附件，原样存放于 `assets/default_reminder.png`，已包含在安装包中，不依赖原来的临时附件路径。
+从 `v1.1.0` 起，默认在触发任意提醒时，在同一条结果中附加一张图片。默认图片是用户提供的附件，原样存放于 `assets/default_reminder.png`，已包含在安装包中，不依赖原来的临时附件路径。
 
 在插件管理页配置：
 
@@ -105,6 +105,7 @@ Linux / Docker 内路径：/app/data/quota.png
 | `codex_path` | `codex` | CLI 名称或完整路径，只填程序路径，不填参数。 |
 | `codex_home` | 空 | 留空继承 CLI 运行环境；可显式指定 `.codex` 用户数据目录。 |
 | `deepseek_provider_id` | 空 | 指定 AstrBot 中的 DeepSeek 官方提供商 ID，复用其凭据。 |
+| `deepseek_show_usd` | `false` | 显示官方接口返回的 USD 余额；默认关闭，不进行汇率换算。 |
 | `deepseek_low_balance_reply` | 该充蓝色大肥鱼了喵，要吃不起白饭了。 | DeepSeek 余额不足提醒，留空隐藏文字。 |
 | `codex_weekly_reset_reply` | 要重置了，快蹬喵 | Codex 周重置提醒，留空隐藏文字。 |
 | `codex_card_expiry_reply` | 重置卡要过期了，快蹬喵 | Codex 重置卡过期提醒，留空隐藏文字。 |
@@ -135,7 +136,7 @@ DeepSeek 提供商选择顺序：
 
 - Codex 使用 `account/rateLimits/read`，按服务返回的额度分组与周期显示，不固定假设只有两个窗口。剩余比例为 `100 - usedPercent`，限制在 0–100%；缺失值显示“未知”。
 - Codex 额度是登录账号的共享使用状态，不是当前聊天的 token 数。额外 credits 保留服务返回的单位，不将它换算成金额。
-- DeepSeek 使用 `/user/balance`，分别显示总可用余额、充值余额、赠金及币种；保留小额余额精度。
+- DeepSeek 使用 `/user/balance`，分别显示总可用余额、充值余额、赠金及币种；保留小额余额精度。默认只显示人民币余额，开启“显示 DeepSeek USD 余额”后也显示接口返回的美元余额。若接口只返回 USD 且开关关闭，会提示余额已隐藏，不把缺失的人民币余额当作 0；接口未返回 USD 时不会换算或生成美元数值。
 - 每个结果附数据查询时间，时间按北京时间显示。缓存结果沿用原数据时间，重置倒计时也是该次查询时计算的值。
 - 两个来源并发查询，某一方失败不影响另一方显示；相同来源的同时查询会合并。不同 DeepSeek Key 的缓存隔离。
 - 本地 Codex 登录身份变化后，已有缓存可能保留到缓存到期；可将 `cache_seconds` 设为 0 或重新加载插件。
@@ -148,7 +149,7 @@ DeepSeek 提供商选择顺序：
 python -B -m unittest discover -s tests -v
 ```
 
-30 项自动测试覆盖：明确查询与解释性问题、注册过滤器阶段的唤醒门槛、管理员限制、重复处理、提供商选择及官方地址校验、多周期与缺失字段、余额精度、三种提醒的阈值和有效期边界、缓存隔离与并发合并、独立失败，以及真实本地 HTTP / stdio 管道的握手、超时、取消、重定向、异常响应和进程回收。包含超时清理期间卸载及凭据选择期间卸载的回归测试；新增自定义文案、缓存后的文案变化、默认与自定义图片、关闭附图、空文案、多提醒只附一张图及缺图降级测试。
+32 项自动测试覆盖：明确查询与解释性问题、注册过滤器阶段的唤醒门槛、管理员限制、重复处理、提供商选择及官方地址校验、多周期与缺失字段、余额精度、三种提醒的阈值和有效期边界、缓存隔离与并发合并、独立失败，以及真实本地 HTTP / stdio 管道的握手、超时、取消、重定向、异常响应和进程回收。包含超时清理期间卸载及凭据选择期间卸载的回归测试；新增自定义文案、缓存后的文案变化、默认与自定义图片、关闭附图、空文案、多提醒只附一张图及缺图降级测试，以及 USD 默认隐藏、开启显示、不换算币种和切换开关后的缓存隔离测试。
 
 另已用本机 Codex CLI `0.155.1` 完成真实额度查询，未发送模型请求。DeepSeek 通信使用本地 HTTP 模拟验证，没有读取真实 API Key；真实 AstrBot 加载和 QQ 等消息平台还需部署后联调。
 

@@ -35,6 +35,12 @@
     "default": 20,
     "hint": "有效范围 3–120 秒。汇总时两个来源并发查询、独立显示结果。"
   },
+  "deepseek_show_usd": {
+    "description": "显示 DeepSeek USD 余额",
+    "type": "bool",
+    "default": false,
+    "hint": "默认隐藏美元余额，只显示接口返回的人民币余额。开启后同时显示接口返回的 USD 余额，不进行汇率换算；不足 10 元提醒仍只判断人民币总余额。"
+  },
   "deepseek_low_balance_reply": {
     "description": "DeepSeek 余额不足提醒文案",
     "type": "string",

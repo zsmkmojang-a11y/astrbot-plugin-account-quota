@@ -198,12 +198,13 @@ def format_codex(data: dict, now: float | None = None) -> str:
     return render_report(codex_report(data, now))
 
 
-def deepseek_report(data: dict) -> QuotaReport:
+def deepseek_report(data: dict, show_usd: bool = False) -> QuotaReport:
     infos = data.get("balance_infos")
     if not isinstance(infos, list) or not infos:
         raise QueryError("DeepSeek 返回的余额数据不完整，请稍后重试。")
     lines = ["DeepSeek（账号余额）"]
     low_balance = False
+    visible_balances = 0
     state = data.get("is_available")
     lines.append("可供 API 调用：" + ("是" if state is True else "否" if state is False else "未知"))
     for info in infos:
@@ -212,6 +213,9 @@ def deepseek_report(data: dict) -> QuotaReport:
         currency = info.get("currency")
         if currency not in ("CNY", "USD"):
             raise QueryError("DeepSeek 返回了无法识别的币种。")
+        if currency == "USD" and not show_usd:
+            continue
+        visible_balances += 1
         lines.append(f"币种：{currency}")
         for field, label in (("total_balance", "可用余额"), ("topped_up_balance", "充值余额"), ("granted_balance", "赠金余额")):
             try:
@@ -224,11 +228,13 @@ def deepseek_report(data: dict) -> QuotaReport:
             if field == "total_balance" and currency == "CNY" and amount < Decimal("10"):
                 low_balance = True
     reminders = ("deepseek_low_balance",) if low_balance else ()
+    if not visible_balances:
+        lines.append("接口仅返回 USD 余额，已按配置隐藏；可开启“显示 DeepSeek USD 余额”查看。")
     return QuotaReport("\n".join(lines), reminders)
 
 
-def format_deepseek(data: dict) -> str:
-    return render_report(deepseek_report(data))
+def format_deepseek(data: dict, show_usd: bool = False) -> str:
+    return render_report(deepseek_report(data, show_usd))
 
 
 async def fetch_deepseek(key: str, timeout: float) -> dict:
@@ -349,7 +355,7 @@ async def fetch_codex(command: str, codex_home: str, timeout: float) -> dict:
                 stderr=asyncio.subprocess.PIPE, env=env, limit=MAX_RESPONSE, **options,
             )
             stderr_task = asyncio.create_task(discard_stderr())
-            await rpc(1, "initialize", {"clientInfo": {"name": "astrbot_account_quota", "title": "AstrBot Account Quota", "version": "1.1.0"}})
+            await rpc(1, "initialize", {"clientInfo": {"name": "astrbot_account_quota", "title": "AstrBot Account Quota", "version": "1.2.0"}})
             await send({"method": "initialized", "params": {}})
             return await rpc(2, "account/rateLimits/read")
     except QueryError:

@@ -104,6 +104,7 @@ class AccountQuotaPlugin(Star):
 
     async def _deepseek_snapshot(self, event):
         timeout = self._seconds("query_timeout_seconds", 20, 3, 120)
+        show_usd = self.config.get("deepseek_show_usd", False) is True
         try:
             async with asyncio.timeout(timeout):
                 key = await self._deepseek_key(event)
@@ -113,9 +114,10 @@ class AccountQuotaPlugin(Star):
             return Snapshot("无法读取 DeepSeek 提供商配置，请检查提供商 ID 与 AstrBot 版本。", time.time(), True)
 
         async def load():
-            return deepseek_report(await fetch_deepseek(key, timeout))
+            return deepseek_report(await fetch_deepseek(key, timeout), show_usd)
 
-        return await self.cache.get("deepseek:" + credential_fingerprint(key), load, self._seconds("cache_seconds", 30, 0, 300))
+        cache_key = "deepseek:" + credential_fingerprint(key) + (":usd" if show_usd else ":cny")
+        return await self.cache.get(cache_key, load, self._seconds("cache_seconds", 30, 0, 300))
 
     async def _answer(self, event, target):
         event.set_extra("astrbot_plugin_account_quota.reminder", False)

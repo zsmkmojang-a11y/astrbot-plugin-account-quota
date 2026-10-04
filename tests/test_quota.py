@@ -64,6 +64,23 @@ class FormatAndIntentTests(unittest.TestCase):
                 data = {"balance_infos": [{"currency": currency, "total_balance": amount, "granted_balance": "0", "topped_up_balance": amount}]}
                 self.assertEqual(quota.DEEPSEEK_LOW_BALANCE in quota.format_deepseek(data), expected)
 
+    def test_deepseek_usd_is_opt_in_without_currency_conversion(self):
+        cny = {"currency": "CNY", "total_balance": "9", "granted_balance": "0", "topped_up_balance": "9"}
+        usd = {"currency": "USD", "total_balance": "1.234", "granted_balance": "0.234", "topped_up_balance": "1"}
+        data = {"balance_infos": [cny, usd]}
+        default = quota.format_deepseek(data)
+        self.assertIn("9 CNY", default)
+        self.assertNotIn("USD", default)
+        enabled = quota.format_deepseek(data, show_usd=True)
+        self.assertIn("9 CNY", enabled)
+        self.assertIn("1.234 USD", enabled)
+        self.assertIn(quota.DEEPSEEK_LOW_BALANCE, enabled)
+        self.assertNotIn("USD", quota.format_deepseek({"balance_infos": [cny]}, show_usd=True))
+        only_usd = quota.format_deepseek({"balance_infos": [usd]})
+        self.assertIn("已按配置隐藏", only_usd)
+        self.assertNotIn("1.234", only_usd)
+        self.assertNotIn(quota.DEEPSEEK_LOW_BALANCE, only_usd)
+
     def test_weekly_remaining_and_reset_boundaries(self):
         now = 1800000000
         for minutes, used, remaining_seconds, expected in [
@@ -348,6 +365,26 @@ class Context:
 
 
 class PluginTests(unittest.IsolatedAsyncioTestCase):
+    async def test_usd_toggle_does_not_reuse_wrong_display_cache(self):
+        plugin = Plugin(Context())
+        data = {"balance_infos": [{"currency": "CNY", "total_balance": "20", "granted_balance": "0", "topped_up_balance": "20"}, {"currency": "USD", "total_balance": "2.5", "granted_balance": "0", "topped_up_balance": "2.5"}]}
+        module_globals = Plugin._deepseek_snapshot.__globals__
+        calls = []
+        async def fetch(key, timeout):
+            calls.append(key)
+            return data
+        with patch.object(plugin, "_deepseek_key", return_value="test-key"), patch.dict(module_globals, {"fetch_deepseek": fetch}):
+            default = await plugin._deepseek_snapshot(Event())
+            self.assertNotIn("USD", default.text)
+            plugin.config["deepseek_show_usd"] = True
+            enabled = await plugin._deepseek_snapshot(Event())
+            self.assertIn("2.5 USD", enabled.text)
+            plugin.config["deepseek_show_usd"] = False
+            hidden = await plugin._deepseek_snapshot(Event())
+            self.assertNotIn("USD", hidden.text)
+            self.assertEqual(len(calls), 2)
+        await plugin.terminate()
+
     @staticmethod
     def low_balance_snapshot():
         report = quota.deepseek_report({"is_available": True, "balance_infos": [{"currency": "CNY", "total_balance": "1.50", "granted_balance": "0", "topped_up_balance": "1.50"}]})

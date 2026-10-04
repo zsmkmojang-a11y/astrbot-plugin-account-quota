@@ -1,6 +1,6 @@
 name: astrbot_plugin_account_quota
 display_name: 账户额度查询
 desc: 查询本机 Codex 额度和 DeepSeek 官方 API 余额，支持命令及唤醒后的自然语言查询。
-version: "1.1.0"
+version: "1.2.0"
 author: mk
 repo: https://github.com/zsmkmojang-a11y/astrbot-plugin-account-quota
