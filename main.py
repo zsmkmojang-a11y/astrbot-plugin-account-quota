@@ -76,15 +76,24 @@ class AccountQuotaPlugin(Star):
             logger.warning(f"账户额度查询：{self._reset_error}")
 
     async def _migrate_poll_config(self):
-        """保留旧 schema 字段直到框架加载后，再迁移秒数并清除旧值。"""
+        """保留旧 schema 字段直到框架加载后，再迁移轮询和冷却秒数。"""
+        updates = {}
         seconds = bounded_int(self.config, "poll_interval", 0, 0, 86400)
-        if seconds == 0:
+        if seconds > 0:
+            minutes = bounded_int(self.config, "poll_interval_minutes", 60, 1, 1440)
+            # 升级时框架会注入默认 60；明确设置的其他分钟数优先。
+            if minutes == 60:
+                minutes = max(1, (seconds + 59) // 60)
+            updates.update(poll_interval_minutes=minutes, poll_interval=0)
+        seconds = bounded_int(self.config, "probability_cooldown", -1, -1, 604800)
+        if seconds >= 0:
+            minutes = bounded_int(self.config, "probability_cooldown_minutes", 360, 0, 10080)
+            if minutes == 360:
+                minutes = (seconds + 59) // 60
+            # 旧值 0 表示不冷却，使用 -1 区分已迁移和有效的旧零值。
+            updates.update(probability_cooldown_minutes=minutes, probability_cooldown=-1)
+        if not updates:
             return
-        minutes = bounded_int(self.config, "poll_interval_minutes", 60, 1, 1440)
-        # 升级时框架会注入默认 60；明确设置的其他分钟数优先。
-        if minutes == 60:
-            minutes = max(1, (seconds + 59) // 60)
-        updates = {"poll_interval_minutes": minutes, "poll_interval": 0}
         save_async = getattr(self.config, "save_config_async", None)
         save_sync = getattr(self.config, "save_config", None)
         if callable(save_async):

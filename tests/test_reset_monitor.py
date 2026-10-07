@@ -129,6 +129,23 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 await monitor.close()
 
+    async def test_cooldown_minutes_and_legacy_seconds(self):
+        for config, expected in [
+            ({}, 21600),
+            ({"probability_cooldown_minutes": 30}, 1800),
+            ({"probability_cooldown_minutes": 0}, 0),
+            ({"probability_cooldown_minutes": 20000}, 604800),
+            ({"probability_cooldown": 1800}, 1800),
+            ({"probability_cooldown_minutes": 10, "probability_cooldown": 1800}, 600),
+        ]:
+            with self.subTest(config=config):
+                monitor = reset.ResetMonitor(self.path, config, self.monitor.send, self.logs.append)
+                try:
+                    self.assertEqual(monitor.cooldown, expected)
+                    self.assertIn(f"同级提醒冷却：{expected / 60:g} 分钟", monitor.status("qq"))
+                finally:
+                    await monitor.close()
+
     def test_signal_below_threshold_does_not_notify(self):
         self.evaluate()
         self.assertEqual(self.evaluate(28, signal={"id": "low", "summary": "hint"}), [])
@@ -392,7 +409,7 @@ class APITests(unittest.IsolatedAsyncioTestCase):
                 values = await asyncio.gather(*(api.get("forecast") for _ in range(10)))
                 self.assertTrue(all(value.p24 == 50 for value in values))
                 self.assertEqual(len(hits), 1)
-                self.assertIn("astrbot-plugin-account-quota/1.4.3", hits[0][1])
+                self.assertIn("astrbot-plugin-account-quota/1.4.4", hits[0][1])
                 for current in ("429", "date", "500", "json", "missing", "redirect", "large"):
                     mode = current
                     api.next_request["forecast"] = 0
@@ -413,7 +430,7 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
     async def test_framework_default_insertion_preserves_and_migrates_seconds(self):
         schema = json.loads((Path(__file__).resolve().parents[1] / "_conf_schema.json").read_text(encoding="utf-8"))
         # 框架按 schema 注入新默认值并移除未声明字段，旧字段必须仍在 schema。
-        old = {"poll_interval": 1800}
+        old = {"poll_interval": 1800, "probability_cooldown": 7200}
         normalized = {key: old.get(key, value["default"]) for key, value in schema.items()}
         class Config(dict):
             async def save_config_async(self, updates):
@@ -425,11 +442,38 @@ class CommandTests(unittest.IsolatedAsyncioTestCase):
             await plugin._migrate_poll_config()
             self.assertEqual(config["poll_interval_minutes"], 30)
             self.assertEqual(config.saved["poll_interval"], 0)
+            self.assertEqual(config["probability_cooldown_minutes"], 120)
+            self.assertEqual(config.saved["probability_cooldown"], -1)
             config["poll_interval_minutes"] = 60
+            config["probability_cooldown_minutes"] = 360
             await plugin._migrate_poll_config()
             self.assertEqual(config["poll_interval_minutes"], 60)  # 后续设置 60 不会被旧值覆盖。
+            self.assertEqual(config["probability_cooldown_minutes"], 360)
         finally:
             await plugin.terminate()
+
+    async def test_cooldown_migration_zero_rounding_and_explicit_minutes(self):
+        schema = json.loads((Path(__file__).resolve().parents[1] / "_conf_schema.json").read_text(encoding="utf-8"))
+        for old, expected in [
+            ({"probability_cooldown": 0}, 0),
+            ({"probability_cooldown": 1}, 1),
+            ({"probability_cooldown": 61}, 2),
+            ({"probability_cooldown": 604800}, 10080),
+            ({"probability_cooldown": 21600, "probability_cooldown_minutes": 15}, 15),
+            ({"probability_cooldown": 21600, "probability_cooldown_minutes": 0}, 0),
+        ]:
+            with self.subTest(old=old):
+                config = {key: old.get(key, value["default"]) for key, value in schema.items()}
+                plugin = Plugin(Context(), config)
+                try:
+                    await plugin._migrate_poll_config()
+                    self.assertEqual(config["probability_cooldown_minutes"], expected)
+                    self.assertEqual(config["probability_cooldown"], -1)
+                    config["probability_cooldown_minutes"] = 360
+                    await plugin._migrate_poll_config()
+                    self.assertEqual(config["probability_cooldown_minutes"], 360)
+                finally:
+                    await plugin.terminate()
 
     async def test_signal_command_group_permissions_and_session_scope(self):
         with tempfile.TemporaryDirectory() as tmp:

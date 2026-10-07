@@ -18,7 +18,7 @@ import aiohttp
 
 SOURCE = "https://codex-reset.com/"
 CREDIT = "Data: codex-reset.com"
-USER_AGENT = "astrbot-plugin-account-quota/1.4.3 (+https://github.com/zsmkmojang-a11y/astrbot-plugin-account-quota)"
+USER_AGENT = "astrbot-plugin-account-quota/1.4.4 (+https://github.com/zsmkmojang-a11y/astrbot-plugin-account-quota)"
 
 
 class ResetError(Exception):
@@ -262,7 +262,11 @@ class ResetMonitor:
             if "poll_interval_minutes" in config
             else bounded_int(config, "poll_interval", 3600, 60, 86400)
         )
-        self.cooldown = bounded_int(config, "probability_cooldown", 21600, 0, 604800)
+        self.cooldown = (
+            bounded_int(config, "probability_cooldown_minutes", 360, 0, 10080) * 60
+            if "probability_cooldown_minutes" in config
+            else bounded_int(config, "probability_cooldown", 21600, 0, 604800)
+        )
         self.thresholds = sorted(set(bounded_int(config, f"threshold_{i}", default, 1, 100) for i, default in enumerate((75, 83, 93), 1)))
         self.state = {
             "subscriptions": {}, "last_seen_reset_id": "", "last_seen_reset_at": 0, "seen_reset_ids": [],
@@ -372,7 +376,7 @@ class ResetMonitor:
         return (f"Reset 订阅设置\n· 当前会话：{'开启' if enabled else '关闭'}\n"
                 f"· 轮询间隔：{self.interval / 60:g} 分钟\n· 预警线：{' / '.join(str(v) + '%' for v in self.thresholds)}\n"
                 f"· 监测范围：未来 24 / 48 小时，任一达到预警线即提醒\n"
-                f"· 同级提醒冷却：{self.cooldown / 3600:g} 小时\n"
+                f"· 同级提醒冷却：{self.cooldown / 60:g} 分钟\n"
                 f"· 概率提醒：{'开' if self.config.get('probability_warning', True) else '关'}\n"
                 f"· 新官方信号单独提醒：{'开' if self.signal_enabled(origin) else '关'}\n"
                 f"· 确认 Reset 提醒：{'开' if self.config.get('reset_notification', True) else '关'}")

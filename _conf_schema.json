@@ -125,11 +125,17 @@
     "default": 93,
     "hint": "不建议修改：推荐保持 75%、83%、93% 三档，修改可能改变提醒频率和档位含义。有效范围 1–100；三个阈值自动排序、去重。"
   },
-  "probability_cooldown": {
-    "description": "Reset 同级重复提醒冷却（秒）",
+  "probability_cooldown_minutes": {
+    "description": "Reset 同级重复提醒冷却（分钟）",
     "type": "int",
-    "default": 21600,
-    "hint": "默认 6 小时。下降后再次跨过同档位须冷却结束；升至更高档位可立即提醒。"
+    "default": 360,
+    "hint": "默认 360 分钟，范围 0–10080；0 表示不冷却。下降后再次跨过同档位须冷却结束；升至更高档位可立即提醒。修改后重新加载插件。"
+  },
+  "probability_cooldown": {
+    "description": "旧版冷却秒数（升级兼容，无需修改）",
+    "type": "int",
+    "default": -1,
+    "hint": "仅用于保留旧版本配置，启动时转换为冷却分钟；不足一分钟向上取整，旧值 0 保留为不冷却。迁移后置为 -1，请使用上面的分钟配置。"
   },
   "signal_notification": {
     "description": "Reset 新官方信号单独提醒（默认开关）",
