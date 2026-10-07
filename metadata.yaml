@@ -1,6 +1,6 @@
 name: astrbot_plugin_account_quota
 display_name: codex额度查询及福利重置预测
 desc: 支持监测codex和deepseek额度以及重置卡状态和自然刷新时间，预测下次福利重置时间。
-version: "1.4.1"
+version: "1.4.3"
 author: mk
 repo: https://github.com/zsmkmojang-a11y/astrbot-plugin-account-quota

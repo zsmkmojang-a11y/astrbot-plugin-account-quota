@@ -11,7 +11,7 @@ import subprocess
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -19,7 +19,6 @@ from urllib.parse import urlsplit
 import aiohttp
 
 
-SHANGHAI = timezone(timedelta(hours=8))
 DEEPSEEK_BALANCE_URL = "https://api.deepseek.com/user/balance"
 MAX_RESPONSE = 1024 * 1024
 TWO_DAYS = 2 * 24 * 60 * 60
@@ -99,7 +98,7 @@ def _time_text(value) -> str:
     if value is None:
         return "未知"
     try:
-        return datetime.fromtimestamp(value, SHANGHAI).strftime("%m-%d %H:%M:%S")
+        return datetime.fromtimestamp(value).strftime("%m-%d %H:%M:%S")
     except (ValueError, OSError, OverflowError):
         return "未知"
 
@@ -123,24 +122,24 @@ def codex_report(data: dict, now: float | None = None) -> QuotaReport:
         buckets = {"codex": legacy} if isinstance(legacy, dict) else {}
     if not buckets:
         raise QueryError("未获取到 Codex 额度；请确认 CLI 使用 ChatGPT 账号登录。")
-    lines = ["Codex"]
+    lines = ["Codex 额度"]
     weekly_reminder = False
     for bucket_id, bucket in buckets.items():
         if not isinstance(bucket, dict):
             continue
         name = bucket.get("limitName") or bucket_id
-        lines.append(f"额度分组：{name}")
+        lines.append(f"\n{name}")
         if isinstance(bucket.get("planType"), str):
-            lines.append(f"套餐：{bucket['planType']}")
+            lines.append(f"· 套餐：{bucket['planType']}")
         found = False
-        for field, label in (("primary", "主要周期"), ("secondary", "次要周期")):
+        for field in ("primary", "secondary"):
             window = bucket.get(field)
             if not isinstance(window, dict):
                 continue
             found = True
             used = _number(window.get("usedPercent"))
             remaining = "未知" if used is None else f"{max(0, min(100, 100 - used)):g}%"
-            lines.append(f"{_duration(window.get('windowDurationMins'))}（{label}）：剩余 {remaining}")
+            lines.append(f"· {_duration(window.get('windowDurationMins'))}额度：剩余 {remaining}")
             resets = window.get("resetsAt")
             reset_text = _time_text(resets)
             delta = _number(resets)
@@ -157,18 +156,18 @@ def codex_report(data: dict, now: float | None = None) -> QuotaReport:
                 seconds = max(0, math.ceil(delta - now))
                 hours, remainder = divmod(seconds, 3600)
                 mins = remainder // 60
-                wait = f"（约 {hours} 小时 {mins} 分钟后）" if seconds else "（重置时间已到，请重新查询）"
-            lines.append(f"重置：{reset_text}{wait}")
+                wait = f" · 约 {hours} 小时 {mins} 分钟后" if seconds else " · 刷新时间已到，请重新查询"
+            lines.append(f"· 刷新时间：{reset_text}{wait}")
         if not found:
-            lines.append("周期额度：未知")
+            lines.append("· 周期额度：未知")
         if bucket.get("rateLimitReachedType"):
-            lines.append("状态：已触及使用限制")
+            lines.append("· 状态：已触及使用限制")
         credits = bucket.get("credits")
         if isinstance(credits, dict):
             if credits.get("unlimited") is True:
-                lines.append("额外 credits：无限制")
+                lines.append("· 额外 credits：无限制")
             elif credits.get("balance") is not None:
-                lines.append(f"额外 credits：{credits['balance']}")
+                lines.append(f"· 额外 credits：{credits['balance']}")
     reminders = []
     if weekly_reminder:
         reminders.append("codex_weekly_reset")
@@ -176,7 +175,7 @@ def codex_report(data: dict, now: float | None = None) -> QuotaReport:
     if isinstance(reset_cards, dict):
         count = _number(reset_cards.get("availableCount"))
         if count is not None and count >= 0 and count % 1 == 0:
-            lines.append(f"可用重置卡：{count:g} 张")
+            lines.append(f"\n· 可用重置卡：{count:g} 张")
         cards = reset_cards.get("credits")
         expiries = []
         if isinstance(cards, list):
@@ -188,7 +187,7 @@ def codex_report(data: dict, now: float | None = None) -> QuotaReport:
                     expiries.append(expires)
         if expiries:
             earliest = min(expiries)
-            lines.append(f"重置卡最近过期：{_time_text(earliest)}")
+            lines.append(f"· 最近到期：{_time_text(earliest)}")
             if earliest - now < TWO_DAYS:
                 reminders.append("codex_card_expiry")
     return QuotaReport("\n".join(lines), tuple(reminders))
@@ -202,11 +201,11 @@ def deepseek_report(data: dict, show_usd: bool = False) -> QuotaReport:
     infos = data.get("balance_infos")
     if not isinstance(infos, list) or not infos:
         raise QueryError("DeepSeek 返回的余额数据不完整，请稍后重试。")
-    lines = ["DeepSeek（账号余额）"]
+    lines = ["DeepSeek 余额"]
     low_balance = False
     visible_balances = 0
     state = data.get("is_available")
-    lines.append("可供 API 调用：" + ("是" if state is True else "否" if state is False else "未知"))
+    lines.append("· 可供 API 调用：" + ("是" if state is True else "否" if state is False else "未知"))
     for info in infos:
         if not isinstance(info, dict):
             raise QueryError("DeepSeek 返回的余额数据格式异常。")
@@ -216,7 +215,7 @@ def deepseek_report(data: dict, show_usd: bool = False) -> QuotaReport:
         if currency == "USD" and not show_usd:
             continue
         visible_balances += 1
-        lines.append(f"币种：{currency}")
+        lines.append(f"\n{currency}")
         for field, label in (("total_balance", "可用余额"), ("topped_up_balance", "充值余额"), ("granted_balance", "赠金余额")):
             try:
                 amount = Decimal(str(info[field]))
@@ -224,7 +223,7 @@ def deepseek_report(data: dict, show_usd: bool = False) -> QuotaReport:
                     raise ValueError
             except (KeyError, InvalidOperation, ValueError):
                 raise QueryError("DeepSeek 返回的余额数据格式异常。") from None
-            lines.append(f"{label}：{amount:f} {currency}")
+            lines.append(f"· {label}：{amount:f} {currency}")
             if field == "total_balance" and currency == "CNY" and amount < Decimal("10"):
                 low_balance = True
     reminders = ("deepseek_low_balance",) if low_balance else ()
@@ -252,7 +251,7 @@ async def fetch_deepseek(key: str, timeout: float) -> dict:
                 if response.status == 429:
                     raise QueryError("DeepSeek 查询过于频繁，请稍后重试。")
                 if response.status != 200:
-                    raise QueryError(f"DeepSeek 余额查询失败（HTTP {response.status}）。")
+                    raise QueryError(f"DeepSeek 余额查询失败，HTTP {response.status}。")
                 body = bytearray()
                 async for chunk in response.content.iter_chunked(16384):
                     body.extend(chunk)
@@ -469,4 +468,4 @@ def render_snapshot(name: str, snapshot: Snapshot, reminder_texts: dict | None =
         f"{name}\n{snapshot.text}" if snapshot.error
         else render_report(QuotaReport(snapshot.text, snapshot.reminders), reminder_texts)
     )
-    return text + "\n数据时间：" + _time_text(snapshot.queried_at) + "（北京时间）"
+    return text + "\n\n· 数据时间：" + _time_text(snapshot.queried_at)

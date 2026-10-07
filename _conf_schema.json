@@ -96,10 +96,10 @@
     "hint": "默认 60 分钟（1 小时），范围 1–1440 分钟。修改后重新加载插件；手动查询仍遵守每端点 60 秒缓存。"
   },
   "timezone": {
-    "description": "Reset 显示时区",
+    "description": "Reset 预测接口时区",
     "type": "string",
     "default": "Asia/Shanghai",
-    "hint": "默认北京时间；其他 IANA 时区需要系统具备相应时区数据库。修改后重新加载插件。"
+    "hint": "用于向预测接口传递时区，回复时间统一按 AstrBot 运行主机的时区显示。其他 IANA 时区需要系统具备相应时区数据库。修改后重新加载插件。"
   },
   "probability_warning": {
     "description": "Reset 概率阈值提醒",

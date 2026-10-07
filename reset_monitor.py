@@ -18,7 +18,7 @@ import aiohttp
 
 SOURCE = "https://codex-reset.com/"
 CREDIT = "Data: codex-reset.com"
-USER_AGENT = "astrbot-plugin-account-quota/1.4.1 (+https://github.com/zsmkmojang-a11y/astrbot-plugin-account-quota)"
+USER_AGENT = "astrbot-plugin-account-quota/1.4.3 (+https://github.com/zsmkmojang-a11y/astrbot-plugin-account-quota)"
 
 
 class ResetError(Exception):
@@ -27,7 +27,7 @@ class ResetError(Exception):
 
 def credited(text: str) -> str:
     # QQ 纯文本同时保留可访问链接和文档要求的末尾署名。
-    return f"{text}\n来源：{SOURCE}\n{CREDIT}"
+    return f"{text}\n\n· 来源：{SOURCE}\n{CREDIT}"
 
 
 def number(value, minimum=0, maximum=float("inf")) -> float:
@@ -60,7 +60,8 @@ def timezone_info(name: str):
 
 
 def display_time(value, zone: str) -> str:
-    return datetime.fromtimestamp(timestamp(value), timezone_info(zone)).strftime("%Y-%m-%d %H:%M:%S") + f" ({zone})"
+    # zone 保留给预测接口使用；回复时间统一遵循 AstrBot 运行主机的时区。
+    return datetime.fromtimestamp(timestamp(value)).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def safe_text(value, limit=800) -> str:
@@ -123,11 +124,12 @@ class Forecast:
         last = display_time(self.last_reset_at, zone) if self.last_reset_at else "未知"
         age = f"{self.age_days:g} 天" if self.age_days is not None else "未知"
         confidence = {"low": "低", "medium": "中", "high": "高"}[self.confidence]
-        return (f"Codex 全局 Reset 预测（第三方预测，不代表已到账）\n"
-                f"未来 24 小时：{self.p24:g}%\n未来 48 小时：{self.p48:g}%\n"
-                f"置信度：{confidence} ({self.confidence})\n距上次 Reset：{age}\n"
-                f"上次 Reset：{last}\n官方信号（来源站判断）：{self.signal_text}\n"
-                f"更新时间：{display_time(self.updated_at, zone)}")
+        return (f"Codex 全局 Reset 预测\n"
+                f"· 未来 24 小时：{self.p24:g}%\n· 未来 48 小时：{self.p48:g}%\n"
+                f"· 置信度：{confidence}\n· 距上次 Reset：{age}\n"
+                f"· 上次 Reset：{last}\n· 官方信号：{self.signal_text}\n"
+                f"· 更新时间：{display_time(self.updated_at, zone)}\n\n"
+                "第三方预测与信号解读，尚未确认到账喵。")
 
 
 @dataclass(frozen=True)
@@ -138,7 +140,7 @@ class ResetEvent:
     url: str
 
     def render(self, zone: str) -> str:
-        return f"{display_time(self.announced_at, zone)}\n{self.summary}\n{self.url}"
+        return f"{display_time(self.announced_at, zone)}\n· {self.summary}\n· 详情：{self.url}"
 
 
 def confirmed_events(data) -> list[ResetEvent]:
@@ -208,7 +210,7 @@ class ResetAPI:
                         self.next_request[endpoint] = time.monotonic() + delay
                         raise ResetError("Reset 数据源请求受限，正在等待 Retry-After，请稍后重试。")
                     if response.status != 200:
-                        raise ResetError(f"Reset 数据源暂不可用（HTTP {response.status}），请稍后重试。")
+                        raise ResetError(f"Reset 数据源暂不可用，HTTP {response.status}，请稍后重试。")
                     # 避免异常服务响应无限占用内存。
                     payload = bytearray()
                     async for chunk in response.content.iter_chunked(65536):
@@ -367,12 +369,13 @@ class ResetMonitor:
 
     def status(self, origin: str) -> str:
         enabled = self.state["subscriptions"].get(origin, False)
-        return (f"当前会话 Reset 订阅：{'开启' if enabled else '关闭'}\n"
-                f"轮询间隔：{self.interval / 60:g} 分钟\n24h / 48h 任一达到阈值：{' / '.join(map(str, self.thresholds))}%\n"
-                f"同级重复提醒冷却：{self.cooldown / 3600:g} 小时\n"
-                f"概率提醒：{'开' if self.config.get('probability_warning', True) else '关'}\n"
-                f"新官方信号单独提醒：{'开' if self.signal_enabled(origin) else '关'}\n"
-                f"确认 Reset 提醒：{'开' if self.config.get('reset_notification', True) else '关'}")
+        return (f"Reset 订阅设置\n· 当前会话：{'开启' if enabled else '关闭'}\n"
+                f"· 轮询间隔：{self.interval / 60:g} 分钟\n· 预警线：{' / '.join(str(v) + '%' for v in self.thresholds)}\n"
+                f"· 监测范围：未来 24 / 48 小时，任一达到预警线即提醒\n"
+                f"· 同级提醒冷却：{self.cooldown / 3600:g} 小时\n"
+                f"· 概率提醒：{'开' if self.config.get('probability_warning', True) else '关'}\n"
+                f"· 新官方信号单独提醒：{'开' if self.signal_enabled(origin) else '关'}\n"
+                f"· 确认 Reset 提醒：{'开' if self.config.get('reset_notification', True) else '关'}")
 
     def _evaluate(self, forecast: Forecast | None, events: list[ResetEvent] | None, now: float) -> list[str]:
         messages = []
@@ -392,7 +395,7 @@ class ResetMonitor:
                 state["last_seen_reset_id"] = latest.id
                 state["last_seen_reset_at"] = timestamp(latest.announced_at)
                 if self.config.get("reset_notification", True):
-                    messages.append("✅ Codex Reset 已由来源站确认啦喵！\n" + latest.render(self.zone) + "\n可以开蹬了喵！\n个人账号是否到账，记得查看实际额度喵。")
+                    messages.append("✅ Codex Reset 已由来源站确认啦喵！\n" + latest.render(self.zone) + "\n\n可以开蹬了喵！\n· 个人账号是否到账，记得查看实际额度喵。")
         if forecast is not None:
             probability = max(forecast.p24, forecast.p48)
             level = max((v for v in self.thresholds if probability >= v), default=0)
@@ -410,20 +413,20 @@ class ResetMonitor:
                     state["seen_signal_ids"] = (state["seen_signal_ids"] + [signal_id])[-200:]
                     # 单独信号通知是否发送由各会话开关决定；跨档提醒始终附带信号状态。
                     if level and (self.config.get("signal_notification", True) or any(state["signal_preferences"].values())):
-                        signal_message = "⚠️ Codex 新官方信号（来源站判断，尚未确认到账）\n" + forecast.signal_text + f"\n未来 24h：{forecast.p24:g}%；48h：{forecast.p48:g}%"
+                        signal_message = "⚠️ Codex 新官方信号喵\n· " + forecast.signal_text + f"\n· 未来 24 小时：{forecast.p24:g}%\n· 未来 48 小时：{forecast.p48:g}%\n\n来源站的信号解读，尚未确认到账喵。"
                 previous = state["last_probability_level"]
                 last_notify = state["probability_notify_times"].get(str(level))
                 cooled = last_notify is None or now - last_notify >= self.cooldown
                 if level > previous and cooled and self.config.get("probability_warning", True):
                     if probability >= 93:
-                        wording = "🚨 Strong Watch！快看看官方信号里的 Reset 时间或日期，目前尚未确认到账喵。"
+                        wording = "🚨 Strong Watch！快看看官方信号里的 Reset 时间或日期喵。"
                     elif probability >= 83:
-                        wording = ("⚠️ 官方很有可能已经说要 Reset 啦，记得核对下面的来源信号；目前尚未确认到账喵。"
-                                   if signal_id else "⚠️ 已达到官方信号预警档位，不过接口暂时没有官方信号，目前尚未确认到账喵。")
+                        wording = ("⚠️ 官方很有可能已经说要 Reset 啦，记得核对下面的来源信号喵。"
+                                   if signal_id else "⚠️ 已达到官方信号预警档位，不过接口暂时没有官方信号喵。")
                     else:
                         wording = "📈 距离上次重置已经有点久啦，未来很有可能会重置喵。"
-                    signal_note = ("官方信号（来源站判断）：" + forecast.signal_text) if signal_id else "接口暂时没有活跃官方信号，这个档位只是概率预警，不代表官方已经表态或给出日期喵。"
-                    messages.append(f"Codex Reset 预测达到 {level}% 提醒档位喵\n{wording}\n未来 24h：{forecast.p24:g}%；48h：{forecast.p48:g}%\n{signal_note}\n这是第三方预测，目前尚未确认 Reset，也不代表额度已到账喵。")
+                    signal_note = ("官方信号：" + forecast.signal_text) if signal_id else "当前无活跃官方信号，概率预警不代表官方已经表态或给出日期喵。"
+                    messages.append(f"Codex Reset 预测达到 {level}% 提醒档位喵\n{wording}\n\n· 未来 24 小时：{forecast.p24:g}%\n· 未来 48 小时：{forecast.p48:g}%\n· {signal_note}\n\n第三方预测与信号解读，尚未确认到账喵。")
                     signal_message = None  # 同轮信号与跨档提醒合并，避免双重预警。
                     # 一次跃过多个档位后，冷却也覆盖被跨过的较低档位。
                     for threshold in self.thresholds:

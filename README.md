@@ -28,7 +28,7 @@ https://github.com/zsmkmojang-a11y/astrbot-plugin-account-quota
 
 | 指令 | 查询范围 |
 | --- | --- |
-| `/额度` | Codex + DeepSeek |
+| `/额度`、`/mytoken` | Codex + DeepSeek，两个指令效果相同 |
 | `/codex额度` | Codex |
 | `/deepseek余额` | DeepSeek |
 
@@ -49,9 +49,9 @@ https://github.com/zsmkmojang-a11y/astrbot-plugin-account-quota
 
 查询命中后仅回复一次，并停止该消息继续调用模型。查询失败和权限不足也会直接返回提示，不需要 DeepSeek 有余额才能执行查询。
 
-Codex 和 DeepSeek 查询开关默认均开启，`/额度` 和合并自然语言查询只获取开启的来源。单独查询关闭的来源时提示“查询已关闭喵”；两者都关闭时只返回关闭提示，不调用接口或模型，也不展示旧缓存。
+Codex 和 DeepSeek 查询开关默认均开启，`/额度`、`/mytoken` 和合并自然语言查询只获取开启的来源。单独查询关闭的来源时提示“查询已关闭喵”；两者都关闭时只返回关闭提示，不调用接口或模型，也不展示旧缓存。
 
-每个额度查询结果附数据时间，时间按北京时间显示。缓存结果沿用原数据时间，倒计时也是该次查询时计算的值。开启两个来源时并发查询，一方失败不影响另一方；相同来源的同时查询会合并，不同 DeepSeek Key 的缓存隔离。
+每个额度查询结果附数据时间，所有回复时间按运行 AstrBot 的本机时区显示。缓存结果沿用原数据时间，倒计时也是该次查询时计算的值。开启两个来源时并发查询，一方失败不影响另一方；相同来源的同时查询会合并，不同 DeepSeek Key 的缓存隔离。
 
 ## DeepSeek：余额监测与配置
 
@@ -149,7 +149,7 @@ C:\Users\你的用户名\AppData\Roaming\npm\node_modules\@openai\codex\node_mod
 
 群管理员、群主或 AstrBot 管理员可操作和查看记录；私聊可自行订阅。订阅对应当前 `unified_msg_origin`，不会自动添加其他群。指令不调用模型，即使 DeepSeek 余额不足也能执行。该功能需要运行环境能够查询本机 Codex；监控的是本插件配置的登录账号，群内通知也是该账号的时间。
 
-每次成功执行 `/额度`、`/codex额度` 或自然语言 Codex 额度查询，会记住接口返回的周刷新时间和重置卡有效期。只有周期长度 `10080` 分钟的窗口视为周额度；只记录 `status=available` 且有效期尚未到的重置卡，同一有效期的卡合并显示数量。接口缺少有效期时保留上次有效记录，不根据卡数量、全局公告或本地估计生成有效期；明确 `availableCount=0` 时清除旧卡记录。
+每次成功执行 `/额度`、`/mytoken`、`/codex额度` 或自然语言 Codex 额度查询，会记住接口返回的周刷新时间和重置卡有效期。只有周期长度 `10080` 分钟的窗口视为周额度；只记录 `status=available` 且有效期尚未到的重置卡，同一有效期的卡合并显示数量。接口缺少有效期时保留上次有效记录，不根据卡数量、全局公告或本地估计生成有效期；明确 `availableCount=0` 时清除旧卡记录。
 
 Codex 额度查询开启时，全局 Reset 的 timeline 出现新的正式确认事件会重新查询本机 Codex 来更新记录，即使全局 Reset 的聊天提醒开关关闭也会执行。首次历史基线不触发；本机查询或保存失败则保留任务，下次 Reset 轮询再试。不把公告日期视为个人周刷新时间，也不认为所有账号已到账。
 
@@ -174,21 +174,22 @@ Codex 额度查询开启时，全局 Reset 的 timeline 出现新的正式确认
 
 ```text
 ⏰ 周额度会在 48 小时内自然刷新啦，剩余的额度记得用起来喵！
-额度分组：codex
-刷新时间：{时间}（北京时间）
+· 额度：codex
+· 刷新时间：{时间}
 ```
 
 ```text
-🎟️ 记住的 1 张重置卡会在 24 小时内到期，快去看看还能不能开蹬喵！
-到期时间：{时间}（北京时间）
-这是上次查询记录的有效期，卡片是否仍可用请查看实际额度喵。
+🎟️ 重置卡会在 24 小时内到期，快去看看还能不能开蹬喵！
+· 数量：1 张
+· 到期时间：{时间}
+· 依据上次查询记录，卡片是否仍可用请查看实际额度喵。
 ```
 
 ```text
 🎉 周额度已经到自然刷新时间啦，可以去查看当前额度喵！
-额度分组：codex
-记录的刷新时间：{时间}（北京时间）
-实际额度以 Codex 返回的结果为准喵。
+· 额度：codex
+· 刷新时间：{时间}
+· 实际额度以 Codex 返回的结果为准喵。
 ```
 
 数据保存在 `data/plugin_data/astrbot_plugin_account_quota/codex_alarm_state.json`，异步落盘并原子替换。修改 CLI 路径或 Codex 用户目录后重新加载，会保留订阅并清除旧路径下的时间；同一路径切换登录账号后请重新查询，记录会按新接口数据更新。不要在账号切换后依赖未更新的旧时间。
@@ -246,7 +247,7 @@ Codex 额度查询开启时，全局 Reset 的 timeline 出现新的正式确认
 | 配置项 | 默认值 | 说明 |
 | --- | --- | --- |
 | `poll_interval_minutes` | 60 | 轮询分钟数，范围 1–1440；修改后重新加载 |
-| `timezone` | Asia/Shanghai | 默认北京时间，其他 IANA 时区需系统时区数据库 |
+| `timezone` | Asia/Shanghai | 传给预测接口的时区；回复时间统一按本机时区显示，其他 IANA 时区需系统时区数据库 |
 | `probability_warning` | true | 概率档位提醒 |
 | `threshold_1` / `threshold_2` / `threshold_3` | 75 / 83 / 93 | 24h / 48h 任一阈值；不建议修改，范围 1–100，自动排序去重 |
 | `probability_cooldown` | 21600 | 同级重复提醒冷却秒数，范围 0–604800 |
@@ -261,7 +262,7 @@ Codex 额度查询开启时，全局 Reset 的 timeline 出现新的正式确认
 
 仅使用站点公开 GET JSON API：[forecast](https://codex-reset.com/api/forecast)、[timeline](https://codex-reset.com/api/timeline?locale=zh)。信号直接使用 forecast，不额外轮询可选 feed。接口无需 Key、不解析 HTML、不使用浏览器爬虫，也不消耗模型额度。请求使用标识本插件及 GitHub 仓库的 User-Agent。
 
-所有 Reset 查询、订阅结果与通知均包含来源链接，并以 `Data: codex-reset.com` 结尾，遵循[数据源开发者规范](https://codex-reset.com/developers)。历史摘要采用接口文档承诺的 `summary`，可能为英文；时间默认转换为北京时间。
+所有 Reset 查询、订阅结果与通知均包含来源链接，并以 `Data: codex-reset.com` 结尾，遵循[数据源开发者规范](https://codex-reset.com/developers)。历史摘要采用接口文档承诺的 `summary`，可能为英文；时间按运行 AstrBot 的本机时区显示。
 
 本插件与 OpenAI、Codex、codex-reset.com 官方均无隶属关系。Reset 概率只是第三方预测，不代表一定发生；“已确认”表示来源站 timeline 满足上述筛选条件，不证明你的个人账号已经到账。接口可能延迟、误分类或变更，账号实际额度请通过 `/codex额度` 或 Codex 客户端查看。
 

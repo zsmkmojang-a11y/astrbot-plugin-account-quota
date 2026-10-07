@@ -136,7 +136,7 @@ class AccountQuotaPlugin(Star):
         try:
             tokens = event.get_message_str().split("codex-alarm", 1)[-1].split()
             if extra or len(tokens) > 1 or action not in ("", "on", "off", "status"):
-                answer = "用法：/codex-alarm（开启）；/codex-alarm off；/codex-alarm status 喵。"
+                answer = "额度刷新提醒用法喵\n· 开启：/codex-alarm\n· 关闭：/codex-alarm off\n· 查看：/codex-alarm status"
             elif self.alarm_monitor is None:
                 answer = self._alarm_error
             elif not self._can_manage_reset_watch(event):
@@ -191,7 +191,7 @@ class AccountQuotaPlugin(Star):
         # CommandFilter 会忽略多余实参，这里主动检查完整指令。
         tokens = event.get_message_str().split("codex-reset", 1)[-1].split()
         if extra or len(tokens) > 2:
-            return "用法：/codex-reset；/codex-reset history [1–20]；/codex-reset watch on|off|status；/codex-reset signal on|off|status"
+            return "Reset 指令用法\n· 预测：/codex-reset\n· 历史：/codex-reset history 5，条数可选 1–20\n· 订阅：/codex-reset watch on|off|status\n· 信号提醒：/codex-reset signal on|off|status"
         if not action:
             return (await monitor.api.get("forecast")).render(monitor.zone)
         if action == "history":
@@ -204,7 +204,7 @@ class AccountQuotaPlugin(Star):
             events = await monitor.api.get("timeline")
             if not events:
                 return "当前接口未返回正式确认的 Reset 记录。"
-            return "Codex 已确认 Reset 历史（来源站确认）\n\n" + "\n\n".join(f"{i}. {item.render(monitor.zone)}" for i, item in enumerate(events[:count], 1))
+            return "Codex Reset 历史 · 来源站已确认\n\n" + "\n\n".join(f"{i}. {item.render(monitor.zone)}" for i, item in enumerate(events[:count], 1))
         if action == "watch" and option in ("on", "off", "status"):
             if option == "status":
                 return monitor.status(event.unified_msg_origin)
@@ -220,7 +220,7 @@ class AccountQuotaPlugin(Star):
             await monitor.set_signal_notification(event.unified_msg_origin, option == "on")
             note = "关闭后仅随概率跨档预警显示当前信号状态；正式确认 Reset 的最终提醒继续遵循其开关。" if option == "off" else "新的官方信号满足预警阈值时可单独提醒。"
             return "已" + ("开启" if option == "on" else "关闭") + "当前会话的新官方信号单独提醒。\n" + note + "\n" + monitor.status(event.unified_msg_origin)
-        return "用法：/codex-reset；/codex-reset history [1–20]；/codex-reset watch on|off|status；/codex-reset signal on|off|status"
+        return "Reset 指令用法\n· 预测：/codex-reset\n· 历史：/codex-reset history 5，条数可选 1–20\n· 订阅：/codex-reset watch on|off|status\n· 信号提醒：/codex-reset signal on|off|status"
 
     @filter.command("codex-reset", priority=100)
     async def reset_command(self, event: AstrMessageEvent, action: str = "", option: str = "", extra: str = ""):
@@ -272,7 +272,7 @@ class AccountQuotaPlugin(Star):
             if not self._is_deepseek(provider):
                 candidates = [p for p in await _maybe_await(self.context.get_all_providers()) if self._is_deepseek(p)]
                 if len(candidates) != 1:
-                    raise QueryError("请在插件配置中指定 DeepSeek 官方提供商 ID（deepseek_provider_id）。")
+                    raise QueryError("请在插件配置中指定 DeepSeek 官方提供商 ID：deepseek_provider_id。")
                 provider = candidates[0]
         if not self._is_deepseek(provider):
             raise QueryError("所选提供商不是 DeepSeek 官方 API，请检查其 api_base。")
@@ -413,6 +413,11 @@ class AccountQuotaPlugin(Star):
     @filter.command("额度", priority=100)
     async def quota_command(self, event: AstrMessageEvent):
         """查询 Codex 额度和 DeepSeek 余额。"""
+        await self._respond(event, "all")
+
+    @filter.command("mytoken", priority=100)
+    async def mytoken_command(self, event: AstrMessageEvent):
+        """与 /额度 相同，查询 Codex 额度和 DeepSeek 余额。"""
         await self._respond(event, "all")
 
     @filter.command("codex额度", priority=100)

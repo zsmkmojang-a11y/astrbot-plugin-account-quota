@@ -40,9 +40,14 @@ class FormatAndIntentTests(unittest.TestCase):
             "other": {"primary": {"usedPercent": None, "windowDurationMins": 15}, "credits": {"balance": "0"}},
         }}
         rendered = quota.format_codex(data, now=1799990000)
-        for text in ["5 小时", "剩余 27%", "7 天", "剩余 42%", "剩余 未知", "重置：未知", "额外 credits：0"]:
+        for text in ["5 小时", "剩余 27%", "7 天", "剩余 42%", "剩余 未知", "刷新时间：未知", "额外 credits：0"]:
             self.assertIn(text, rendered)
         self.assertNotIn("剩余 100%", rendered)
+
+    def test_times_use_host_timezone(self):
+        with patch.object(quota, "datetime", wraps=quota.datetime) as clock:
+            quota._time_text(1800000000)
+            clock.fromtimestamp.assert_called_once_with(1800000000)
 
     def test_codex_legacy_and_invalid_number(self):
         self.assertIn("剩余 0%", quota.format_codex({"rateLimits": {"primary": {"usedPercent": 105}}}))
@@ -387,7 +392,7 @@ class PluginTests(unittest.IsolatedAsyncioTestCase):
     async def test_disabled_command_and_natural_query_never_invoke_sources(self):
         plugin = Plugin(Context(), {"codex_query_enabled": False, "deepseek_query_enabled": False})
         with patch.object(plugin, "_codex_snapshot") as codex, patch.object(plugin, "_deepseek_snapshot") as deepseek:
-            for handler, message in [(plugin.quota_command, "额度"), (plugin.codex_command, "codex额度"), (plugin.deepseek_command, "deepseek余额"), (plugin.natural_query, "帮我查一下额度"), (plugin.natural_query, "查一下 Codex 额度"), (plugin.natural_query, "查一下 DeepSeek 余额")]:
+            for handler, message in [(plugin.quota_command, "额度"), (plugin.mytoken_command, "mytoken"), (plugin.codex_command, "codex额度"), (plugin.deepseek_command, "deepseek余额"), (plugin.natural_query, "帮我查一下额度"), (plugin.natural_query, "查一下 Codex 额度"), (plugin.natural_query, "查一下 DeepSeek 余额")]:
                 event = Event(message)
                 await handler(event)
                 self.assertEqual(len(event.sent), 1)
@@ -579,10 +584,24 @@ class PluginTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(event.sent, ["result"])
             self.assertTrue(event.stopped)
             self.assertEqual(calls, ["all"])
-        unauthorized = Event(admin=False)
-        await plugin.quota_command(unauthorized)
-        self.assertIn("仅 AstrBot 管理员", unauthorized.sent[0])
-        self.assertTrue(unauthorized.stopped)
+        for handler in (plugin.quota_command, plugin.mytoken_command):
+            unauthorized = Event(admin=False)
+            await handler(unauthorized)
+            self.assertIn("仅 AstrBot 管理员", unauthorized.sent[0])
+            self.assertTrue(unauthorized.stopped)
+        await plugin.terminate()
+
+    async def test_mytoken_same_reply_and_dedup_as_quota(self):
+        plugin = Plugin(Context())
+        snapshot = quota.Snapshot("quota result", 1800000000)
+        with patch.object(plugin, "_codex_snapshot", return_value=snapshot), patch.object(plugin, "_deepseek_snapshot", return_value=snapshot):
+            original, alias = Event("额度"), Event("mytoken")
+            await plugin.quota_command(original)
+            await plugin.mytoken_command(alias)
+            await plugin.quota_command(alias)
+            self.assertEqual(alias.sent, original.sent)
+            self.assertEqual(len(alias.sent), 1)
+            self.assertTrue(alias.stopped)
         await plugin.terminate()
 
     async def test_disable_natural_and_explanatory_questions(self):

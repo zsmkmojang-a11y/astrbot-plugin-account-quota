@@ -177,17 +177,17 @@ class AlarmMonitor:
     def status(self, origin: str) -> str:
         enabled = self.state["subscriptions"].get(origin, False)
         hours = "、".join(str(h) for h in reversed(self.reminder_hours))
-        lines = [f"本会话额度刷新提醒：{'开启' if enabled else '关闭'}喵。", f"轮询间隔：{self.interval / 60:g} 分钟喵。", f"会在 {hours} 小时内提醒，正常到达自然刷新时间时也会通知，错过的旧通知不补发喵。"]
+        lines = ["额度刷新提醒设置喵", f"· 当前会话：{'开启' if enabled else '关闭'}", f"· 轮询间隔：{self.interval / 60:g} 分钟", f"· 提前提醒：{hours} 小时", "· 正常到达自然刷新时间时通知，错过的旧通知不补发喵。"]
         for entry in self.state["weekly"].values():
-            lines.append(f"周额度自然刷新（{entry['label']}）：{_time_text(entry['at'])}（北京时间）")
+            lines.append(f"· {entry['label']} 周额度刷新：{_time_text(entry['at'])}")
         for entry in self.state["cards"].values():
-            lines.append(f"重置卡到期：{_time_text(entry['at'])}（北京时间），{entry['count']} 张")
+            lines.append(f"· 重置卡到期：{_time_text(entry['at'])} · {entry['count']} 张")
         if not self.state["weekly"]:
-            lines.append("还没有记住有效的周额度刷新时间喵。")
+            lines.append("· 还没有记住有效的周额度刷新时间喵。")
         if not self.state["cards"]:
-            lines.append("目前没有记住有效的重置卡到期时间喵。")
+            lines.append("· 目前没有记住有效的重置卡到期时间喵。")
         if self.state["updated_at"]:
-            lines.append(f"记录时间：{_time_text(self.state['updated_at'])}（北京时间）")
+            lines.append(f"· 记录时间：{_time_text(self.state['updated_at'])}")
         return "\n".join(lines)
 
     def _event(self, kind: str, key: str, entry: dict, stage: str, now: float) -> dict:
@@ -195,11 +195,11 @@ class AlarmMonitor:
         identity = hashlib.sha256(f"{self.account_key}|{kind}|{key}|{at}|{stage}".encode()).hexdigest()
         if kind == "weekly":
             if stage == "due":
-                text = f"🎉 周额度已经到自然刷新时间啦，可以去查看当前额度喵！\n额度分组：{entry['label']}\n记录的刷新时间：{_time_text(at)}（北京时间）\n实际额度以 Codex 返回的结果为准喵。"
+                text = f"🎉 周额度已经到自然刷新时间啦，可以去查看当前额度喵！\n· 额度：{entry['label']}\n· 刷新时间：{_time_text(at)}\n· 实际额度以 Codex 返回的结果为准喵。"
             else:
-                text = f"⏰ 周额度会在 {stage[:-1]} 小时内自然刷新啦，剩余的额度记得用起来喵！\n额度分组：{entry['label']}\n刷新时间：{_time_text(at)}（北京时间）"
+                text = f"⏰ 周额度会在 {stage[:-1]} 小时内自然刷新啦，剩余的额度记得用起来喵！\n· 额度：{entry['label']}\n· 刷新时间：{_time_text(at)}"
         else:
-            text = f"🎟️ 记住的 {entry['count']} 张重置卡会在 {stage[:-1]} 小时内到期，快去看看还能不能开蹬喵！\n到期时间：{_time_text(at)}（北京时间）\n这是上次查询记录的有效期，卡片是否仍可用请查看实际额度喵。"
+            text = f"🎟️ 重置卡会在 {stage[:-1]} 小时内到期，快去看看还能不能开蹬喵！\n· 数量：{entry['count']} 张\n· 到期时间：{_time_text(at)}\n· 依据上次查询记录，卡片是否仍可用请查看实际额度喵。"
         return {"id": identity, "kind": kind, "key": key, "at": at, "stage": stage, "text": text, "created_at": now}
 
     def _queue_due(self, now: float, scheduled_due: dict | None = None):

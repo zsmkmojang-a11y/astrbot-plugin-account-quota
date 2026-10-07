@@ -29,9 +29,16 @@ def timeline(day=1, event_id=None):
 class ResetFormatTests(unittest.TestCase):
     def test_forecast_percentages_timezone_credit(self):
         text = reset.credited(forecast().render("Asia/Shanghai"))
-        for fragment in ("40%", "中 (medium)", "08:00:00", "无官方信号", "第三方预测", "https://codex-reset.com/"):
+        local_time = reset.datetime.fromtimestamp(reset.timestamp("2026-10-02T00:00:00Z")).strftime("%Y-%m-%d %H:%M:%S")
+        for fragment in ("40%", "· 置信度：中", local_time, "无官方信号", "第三方预测", "https://codex-reset.com/"):
             self.assertIn(fragment, text)
         self.assertTrue(text.endswith(reset.CREDIT))
+
+    def test_display_time_uses_host_timezone(self):
+        value = "2026-10-02T00:00:00Z"
+        with patch.object(reset, "datetime", wraps=reset.datetime) as clock:
+            reset.display_time(value, "UTC")
+            clock.fromtimestamp.assert_called_once_with(reset.timestamp(value))
 
     def test_invalid_fields_are_not_zero_or_confirmed(self):
         for value in (True, -1, 101, float("nan"), "75"):
@@ -385,7 +392,7 @@ class APITests(unittest.IsolatedAsyncioTestCase):
                 values = await asyncio.gather(*(api.get("forecast") for _ in range(10)))
                 self.assertTrue(all(value.p24 == 50 for value in values))
                 self.assertEqual(len(hits), 1)
-                self.assertIn("astrbot-plugin-account-quota/1.4.1", hits[0][1])
+                self.assertIn("astrbot-plugin-account-quota/1.4.3", hits[0][1])
                 for current in ("429", "date", "500", "json", "missing", "redirect", "large"):
                     mode = current
                     api.next_request["forecast"] = 0
