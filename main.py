@@ -3,12 +3,16 @@
 import asyncio
 import inspect
 import time
+from collections.abc import Mapping
 from pathlib import Path
 
 from astrbot.api import logger
-from astrbot.api.event import AstrMessageEvent, filter
+from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.message_components import Image, Plain
-from astrbot.api.star import Context, Star
+from astrbot.api.star import Context, Star, StarTools
+
+from .reset_monitor import ResetError, ResetMonitor, bounded_int, credited
+from .alarm_monitor import AlarmError, AlarmMonitor
 
 from .quota import (
     NATURAL_PATTERN,
@@ -43,11 +47,206 @@ class AccountQuotaPlugin(Star):
         super().__init__(context)
         self.config = config if hasattr(config, "get") else {}
         self.cache = QueryCache()
+        self._codex_read_lock = asyncio.Lock()
         self._closing = False
+        self.reset_monitor = None
+        self.alarm_monitor = None
+        self._reset_error = "Reset 监控尚未初始化，请稍后重试。"
+        self._alarm_error = "额度刷新提醒还没初始化好，请稍后再试喵。"
+
+    async def initialize(self):
+        """框架加载后恢复订阅并启动独立的公共 Reset 监控。"""
+        try:
+            path = StarTools.get_data_dir("astrbot_plugin_account_quota") / "codex_alarm_state.json"
+            account_key = credential_fingerprint(self._text("codex_path", "codex") + "\0" + self._text("codex_home"))
+            alarm = AlarmMonitor(path, account_key, self._send_alarm, self._refresh_codex_alarm, logger.warning, self.config)
+            await alarm.start()
+            self.alarm_monitor = alarm
+        except (AlarmError, OSError, RuntimeError, ValueError) as exc:
+            self._alarm_error = str(exc) if isinstance(exc, AlarmError) else "额度刷新提醒初始化失败，请检查插件数据目录权限喵。"
+            logger.warning(f"账户额度查询：{self._alarm_error}")
+        try:
+            await self._migrate_poll_config()
+            path = StarTools.get_data_dir("astrbot_plugin_account_quota") / "reset_state.json"
+            monitor = ResetMonitor(path, self.config, self._send_reset, logger.warning, self._on_confirmed_reset)
+            await monitor.start()
+            self.reset_monitor = monitor
+        except (ResetError, OSError, RuntimeError, ValueError) as exc:
+            self._reset_error = str(exc) if isinstance(exc, ResetError) else "Reset 监控初始化失败，请检查插件数据目录权限。"
+            logger.warning(f"账户额度查询：{self._reset_error}")
+
+    async def _migrate_poll_config(self):
+        """保留旧 schema 字段直到框架加载后，再迁移秒数并清除旧值。"""
+        seconds = bounded_int(self.config, "poll_interval", 0, 0, 86400)
+        if seconds == 0:
+            return
+        minutes = bounded_int(self.config, "poll_interval_minutes", 60, 1, 1440)
+        # 升级时框架会注入默认 60；明确设置的其他分钟数优先。
+        if minutes == 60:
+            minutes = max(1, (seconds + 59) // 60)
+        updates = {"poll_interval_minutes": minutes, "poll_interval": 0}
+        save_async = getattr(self.config, "save_config_async", None)
+        save_sync = getattr(self.config, "save_config", None)
+        if callable(save_async):
+            await _maybe_await(save_async(updates))
+        elif callable(save_sync):
+            await asyncio.to_thread(save_sync, updates)
+        else:
+            self.config.update(updates)
+
+    async def _send_reset(self, origin, text):
+        if self._closing:
+            raise ResetError("插件正在停止。")
+        sent = await self.context.send_message(origin, MessageChain().message(text))
+        if sent is False:
+            raise ResetError("目标消息平台不可用。")
+
+    async def _send_alarm(self, origin, text):
+        if self._closing:
+            raise AlarmError("插件正在停止喵。")
+        chain = MessageChain().message(text)
+        image = self._reminder_image()
+        if image is not None:
+            chain.chain.append(image)
+        if await self.context.send_message(origin, chain) is False:
+            raise AlarmError("目标消息平台暂时不可用喵。")
+
+    async def _refresh_codex_alarm(self):
+        if not self._query_enabled("codex"):
+            return
+        # 独立缓存键避开普通查询的旧快照；仍合并并发且由 QueryCache 负责卸载取消。
+        snapshot = await self._codex_snapshot(refresh=True)
+        if snapshot.error:
+            raise AlarmError(snapshot.text)
+
+    async def _on_confirmed_reset(self, event_id):
+        if not self._query_enabled("codex"):
+            return
+        if self.alarm_monitor is None:
+            raise AlarmError(self._alarm_error)
+        if not self._closing:
+            await self._refresh_codex_alarm()
+
+    @filter.command("codex-alarm", priority=100)
+    async def alarm_command(self, event: AstrMessageEvent, action: str = "", extra: str = ""):
+        """订阅当前会话的周自然刷新与重置卡到期提醒。"""
+        if self._closing or event.is_stopped() or event.get_extra("astrbot_plugin_account_quota.handled", False):
+            return
+        event.set_extra("astrbot_plugin_account_quota.handled", True)
+        try:
+            tokens = event.get_message_str().split("codex-alarm", 1)[-1].split()
+            if extra or len(tokens) > 1 or action not in ("", "on", "off", "status"):
+                answer = "用法：/codex-alarm（开启）；/codex-alarm off；/codex-alarm status 喵。"
+            elif self.alarm_monitor is None:
+                answer = self._alarm_error
+            elif not self._can_manage_reset_watch(event):
+                answer = "额度刷新订阅及记录仅限本群管理员、群主或 AstrBot 管理员查看和修改；私聊可自行订阅喵。"
+            elif action == "status":
+                answer = self.alarm_monitor.status(event.unified_msg_origin)
+            else:
+                enabled = action != "off"
+                await self.alarm_monitor.subscribe(event.unified_msg_origin, enabled)
+                answer = "已" + ("开启" if enabled else "关闭") + "本会话的额度刷新提醒喵。"
+                if enabled and not self._query_enabled("codex"):
+                    answer += "\nCodex 额度查询已关闭，自动读取暂停，提醒会依据已有日期记录喵。"
+                elif enabled:
+                    try:
+                        await self._refresh_codex_alarm()
+                    except (AlarmError, QueryError):
+                        self.alarm_monitor.refresh_requested = True
+                        answer += "\n订阅已保存，不过暂时没能读取最新额度，会保留已有时间并稍后重试喵。"
+                answer += "\n" + self.alarm_monitor.status(event.unified_msg_origin)
+            if not self._closing:
+                await event.send(event.plain_result(answer))
+        except AlarmError as exc:
+            if not self._closing:
+                await event.send(event.plain_result(str(exc)))
+        except Exception as exc:
+            logger.warning(f"Codex 额度刷新订阅失败：{type(exc).__name__}")
+            if not self._closing:
+                await event.send(event.plain_result("额度刷新订阅操作失败，请稍后再试喵。"))
+        finally:
+            event.stop_event()
+
+    @staticmethod
+    def _can_manage_reset_watch(event):
+        if event.is_admin():
+            return True
+        message_type = event.get_message_type()
+        kind = getattr(message_type, "value", message_type)
+        if kind == "FriendMessage":
+            return True
+        # AstrBot 的 is_admin 是框架管理员；QQ 群角色来自 OneBot 事件元数据。
+        if kind != "GroupMessage" or event.get_platform_name() != "aiocqhttp":
+            return False
+        raw = getattr(event.message_obj, "raw_message", None)
+        sender = raw.get("sender") if isinstance(raw, Mapping) else getattr(raw, "sender", None)
+        role = sender.get("role") if isinstance(sender, Mapping) else None
+        return role in ("admin", "owner")
+
+    async def _reset_answer(self, event, action, option, extra):
+        monitor = self.reset_monitor
+        if monitor is None:
+            return self._reset_error
+        # CommandFilter 会忽略多余实参，这里主动检查完整指令。
+        tokens = event.get_message_str().split("codex-reset", 1)[-1].split()
+        if extra or len(tokens) > 2:
+            return "用法：/codex-reset；/codex-reset history [1–20]；/codex-reset watch on|off|status；/codex-reset signal on|off|status"
+        if not action:
+            return (await monitor.api.get("forecast")).render(monitor.zone)
+        if action == "history":
+            try:
+                count = int(option) if option else 5
+                if not 1 <= count <= 20:
+                    raise ValueError
+            except ValueError:
+                return "历史条数须为 1–20 的整数，例如 /codex-reset history 10。"
+            events = await monitor.api.get("timeline")
+            if not events:
+                return "当前接口未返回正式确认的 Reset 记录。"
+            return "Codex 已确认 Reset 历史（来源站确认）\n\n" + "\n\n".join(f"{i}. {item.render(monitor.zone)}" for i, item in enumerate(events[:count], 1))
+        if action == "watch" and option in ("on", "off", "status"):
+            if option == "status":
+                return monitor.status(event.unified_msg_origin)
+            if not self._can_manage_reset_watch(event):
+                return "群订阅仅限当前 QQ 群管理员、群主或 AstrBot 管理员修改；私聊可自行订阅。"
+            await monitor.subscribe(event.unified_msg_origin, option == "on")
+            return "已" + ("开启" if option == "on" else "关闭") + "当前会话的 Codex Reset 订阅。\n" + monitor.status(event.unified_msg_origin)
+        if action == "signal" and option in ("on", "off", "status"):
+            if option == "status":
+                return monitor.status(event.unified_msg_origin)
+            if not self._can_manage_reset_watch(event):
+                return "群信号提醒开关仅限当前 QQ 群管理员、群主或 AstrBot 管理员修改；私聊可自行设置。"
+            await monitor.set_signal_notification(event.unified_msg_origin, option == "on")
+            note = "关闭后仅随概率跨档预警显示当前信号状态；正式确认 Reset 的最终提醒继续遵循其开关。" if option == "off" else "新的官方信号满足预警阈值时可单独提醒。"
+            return "已" + ("开启" if option == "on" else "关闭") + "当前会话的新官方信号单独提醒。\n" + note + "\n" + monitor.status(event.unified_msg_origin)
+        return "用法：/codex-reset；/codex-reset history [1–20]；/codex-reset watch on|off|status；/codex-reset signal on|off|status"
+
+    @filter.command("codex-reset", priority=100)
+    async def reset_command(self, event: AstrMessageEvent, action: str = "", option: str = "", extra: str = ""):
+        """公开 Reset 预测、历史以及当前会话订阅；不调用模型。"""
+        if self._closing or event.is_stopped() or event.get_extra("astrbot_plugin_account_quota.handled", False):
+            return
+        event.set_extra("astrbot_plugin_account_quota.handled", True)
+        try:
+            try:
+                answer = await self._reset_answer(event, action, option, extra)
+            except ResetError as exc:
+                answer = str(exc)
+            except Exception as exc:
+                logger.warning(f"Reset 指令失败：{type(exc).__name__}")
+                answer = "Reset 查询失败，请稍后重试或检查插件日志。"
+            if not self._closing:
+                await event.send(event.plain_result(credited(answer)))
+        finally:
+            event.stop_event()
 
     def _text(self, name, default=""):
         value = self.config.get(name, default)
         return value.strip() if isinstance(value, str) else default
+
+    def _query_enabled(self, source):
+        return self.config.get(source + "_query_enabled", True) is not False
 
     def _seconds(self, name, default, minimum, maximum):
         value = self.config.get(name, default)
@@ -92,17 +291,37 @@ class AccountQuotaPlugin(Star):
         config = getattr(provider, "provider_config", None)
         return isinstance(config, dict) and is_official_deepseek(config.get("api_base", ""))
 
-    async def _codex_snapshot(self):
+    async def _codex_snapshot(self, refresh=False):
+        if not self._query_enabled("codex"):
+            return Snapshot("Codex 额度查询已关闭喵。", time.time(), True)
         command = self._text("codex_path", "codex")
         home = self._text("codex_home")
         timeout = self._seconds("query_timeout_seconds", 20, 3, 120)
 
         async def load():
-            return codex_report(await fetch_codex(command, home, timeout))
+            # 普通查询与强制刷新依次读取和记忆，旧的慢请求不能覆盖新周期。
+            async with self._codex_read_lock:
+                if not self._query_enabled("codex"):
+                    raise QueryError("Codex 额度查询已关闭喵。")
+                data = await fetch_codex(command, home, timeout)
+                report = codex_report(data)
+                if self.alarm_monitor is not None and not self._closing:
+                    try:
+                        await self.alarm_monitor.remember(data)
+                    except Exception as exc:
+                        logger.warning(f"Codex 刷新时间记忆失败，额度查询仍正常返回：{type(exc).__name__}")
+                        if refresh:
+                            raise QueryError("额度已经读到，但刷新时间没能保存，稍后会再试喵。") from exc
+                return report
 
-        return await self.cache.get("codex:" + credential_fingerprint(command + "\0" + home), load, self._seconds("cache_seconds", 30, 0, 300))
+        key = "codex:" + credential_fingerprint(command + "\0" + home)
+        if refresh:
+            key += ":alarm-refresh"
+        return await self.cache.get(key, load, 0 if refresh else self._seconds("cache_seconds", 30, 0, 300))
 
     async def _deepseek_snapshot(self, event):
+        if not self._query_enabled("deepseek"):
+            return Snapshot("DeepSeek 余额查询已关闭喵。", time.time(), True)
         timeout = self._seconds("query_timeout_seconds", 20, 3, 120)
         show_usd = self.config.get("deepseek_show_usd", False) is True
         try:
@@ -114,8 +333,12 @@ class AccountQuotaPlugin(Star):
             return Snapshot("无法读取 DeepSeek 提供商配置，请检查提供商 ID 与 AstrBot 版本。", time.time(), True)
 
         async def load():
+            if not self._query_enabled("deepseek"):
+                raise QueryError("DeepSeek 余额查询已关闭喵。")
             return deepseek_report(await fetch_deepseek(key, timeout), show_usd)
 
+        if not self._query_enabled("deepseek"):
+            return Snapshot("DeepSeek 余额查询已关闭喵。", time.time(), True)
         cache_key = "deepseek:" + credential_fingerprint(key) + (":usd" if show_usd else ":cny")
         return await self.cache.get(cache_key, load, self._seconds("cache_seconds", 30, 0, 300))
 
@@ -124,12 +347,18 @@ class AccountQuotaPlugin(Star):
         if self.config.get("admin_only", True) and not event.is_admin():
             return "仅 AstrBot 管理员可以查询账户额度和余额。"
         names, jobs = [], []
-        if target in ("all", "codex"):
+        if target in ("all", "codex") and self._query_enabled("codex"):
             names.append("Codex")
             jobs.append(self._codex_snapshot())
-        if target in ("all", "deepseek"):
+        if target in ("all", "deepseek") and self._query_enabled("deepseek"):
             names.append("DeepSeek")
             jobs.append(self._deepseek_snapshot(event))
+        if not jobs:
+            if target == "codex":
+                return "Codex 额度查询已关闭喵。"
+            if target == "deepseek":
+                return "DeepSeek 余额查询已关闭喵。"
+            return "Codex 额度和 DeepSeek 余额查询都已关闭喵。"
         results = await asyncio.gather(*jobs, return_exceptions=True)
         rendered = []
         reminder_texts = {
@@ -209,4 +438,9 @@ class AccountQuotaPlugin(Star):
 
     async def terminate(self):
         self._closing = True
-        await self.cache.close()
+        jobs = [self.cache.close()]
+        if self.reset_monitor is not None:
+            jobs.append(self.reset_monitor.close())
+        if self.alarm_monitor is not None:
+            jobs.append(self.alarm_monitor.close())
+        await asyncio.gather(*jobs)

@@ -11,6 +11,18 @@
     "default": true,
     "hint": "强唤醒词或 @ 机器人后说“帮我查一下额度”。私聊遵循 AstrBot 自身唤醒设置。"
   },
+  "codex_query_enabled": {
+    "description": "启用 Codex 额度查询",
+    "type": "bool",
+    "default": true,
+    "hint": "关闭后不读取本机 Codex 额度，包括命令、自然语言、闹钟及全局 Reset 确认后的自动读取。全局 Reset 预测与通知继续运行；已有闹钟日期保留。"
+  },
+  "deepseek_query_enabled": {
+    "description": "启用 DeepSeek 余额查询",
+    "type": "bool",
+    "default": true,
+    "hint": "关闭后不读取 DeepSeek 提供商凭据，也不调用余额接口。/额度 汇总会跳过关闭的来源；单独查询时提示已关闭。"
+  },
   "codex_path": {
     "description": "Codex 程序路径",
     "type": "string",
@@ -76,5 +88,83 @@
     "type": "int",
     "default": 30,
     "hint": "有效范围 0–300 秒，0 表示不缓存。回复附数据查询时间；失败最多缓存 5 秒。"
+  },
+  "poll_interval_minutes": {
+    "description": "Reset 后台轮询间隔（分钟）",
+    "type": "int",
+    "default": 60,
+    "hint": "默认 60 分钟（1 小时），范围 1–1440 分钟。修改后重新加载插件；手动查询仍遵守每端点 60 秒缓存。"
+  },
+  "timezone": {
+    "description": "Reset 显示时区",
+    "type": "string",
+    "default": "Asia/Shanghai",
+    "hint": "默认北京时间；其他 IANA 时区需要系统具备相应时区数据库。修改后重新加载插件。"
+  },
+  "probability_warning": {
+    "description": "Reset 概率阈值提醒",
+    "type": "bool",
+    "default": true,
+    "hint": "同时检查 24h / 48h，任一达到阈值且向上跨档时提醒；低于 75% 的默认普通预测不推送。"
+  },
+  "threshold_1": {
+    "description": "Reset 24h / 48h 预警阈值 1（%）",
+    "type": "int",
+    "default": 75,
+    "hint": "不建议修改：推荐保持 75%、83%、93% 三档，修改可能改变提醒频率和档位含义。有效范围 1–100；三个阈值自动排序、去重。"
+  },
+  "threshold_2": {
+    "description": "Reset 24h / 48h 预警阈值 2（%）",
+    "type": "int",
+    "default": 83,
+    "hint": "不建议修改：推荐保持 75%、83%、93% 三档，修改可能改变提醒频率和档位含义。有效范围 1–100；三个阈值自动排序、去重。"
+  },
+  "threshold_3": {
+    "description": "Reset 24h / 48h 预警阈值 3（%）",
+    "type": "int",
+    "default": 93,
+    "hint": "不建议修改：推荐保持 75%、83%、93% 三档，修改可能改变提醒频率和档位含义。有效范围 1–100；三个阈值自动排序、去重。"
+  },
+  "probability_cooldown": {
+    "description": "Reset 同级重复提醒冷却（秒）",
+    "type": "int",
+    "default": 21600,
+    "hint": "默认 6 小时。下降后再次跨过同档位须冷却结束；升至更高档位可立即提醒。"
+  },
+  "signal_notification": {
+    "description": "Reset 新官方信号单独提醒（默认开关）",
+    "type": "bool",
+    "default": true,
+    "hint": "默认开启。关闭后新官方信号不单独推送，概率跨档预警仍附当前信号状态；正式确认提醒由其开关控制。群管理员可用 /codex-reset signal on|off 单独设置本群，私聊可自行设置；会话设置优先。"
+  },
+  "reset_notification": {
+    "description": "Reset 正式确认提醒",
+    "type": "bool",
+    "default": true,
+    "hint": "仅 timeline 中 group=reset 且 announcement_state=announced 的新记录；首次运行只建立历史基线。"
+  },
+  "poll_interval": {
+    "description": "旧版轮询秒数（升级兼容，无需修改）",
+    "type": "int",
+    "default": 0,
+    "hint": "仅用于保留旧版本配置，启动时自动转换到轮询分钟并将此字段归零。新设置请使用上面的分钟配置。"
+  },
+  "codex_alarm_poll_minutes": {
+    "description": "Codex 额度闹钟轮询间隔（分钟）",
+    "type": "int",
+    "default": 30,
+    "hint": "独立于全局 Reset 轮询，范围 1–1440。查询或订阅读取到已进入提醒窗口且未发送的时间，会立即提醒，不等下一轮。自然刷新另设到点定时器；错过的旧通知不补发。"
+  },
+  "codex_alarm_reminder_hours_1": {
+    "description": "Codex 额度闹钟提前提醒时间 1（小时）",
+    "type": "int",
+    "default": 48,
+    "hint": "同时用于周自然刷新和重置卡到期，范围 1–720，两个时间自动排序去重。进入多个窗口时只发最近档位。"
+  },
+  "codex_alarm_reminder_hours_2": {
+    "description": "Codex 额度闹钟提前提醒时间 2（小时）",
+    "type": "int",
+    "default": 24,
+    "hint": "默认 24 小时；与另一提醒时间自动排序去重。相同时间点、相同档位每个订阅会话只提醒一次。"
   }
 }

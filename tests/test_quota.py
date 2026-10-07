@@ -240,9 +240,11 @@ class AsyncTests(unittest.IsolatedAsyncioTestCase):
     async def test_deepseek_real_http(self):
         from aiohttp import web
         received = []
+        received_modes = []
         async def handler(request):
             received.append(request.headers.get("Authorization"))
             mode = request.match_info["mode"]
+            received_modes.append(mode)
             if mode == "ok":
                 return web.json_response({"balance_infos": [{"currency": "USD", "total_balance": "1.25", "granted_balance": "0", "topped_up_balance": "1.25"}], "is_available": True})
             if mode == "redirect":
@@ -273,7 +275,9 @@ class AsyncTests(unittest.IsolatedAsyncioTestCase):
                             await quota.fetch_deepseek("test-key", 0.02 if mode == "slow" else 2)
                         self.assertNotIn("SECRET_TOKEN", str(caught.exception))
             self.assertTrue(all(value == "Bearer test-key" for value in received))
-            self.assertEqual(len(received), 8)  # 重定向未被跟随。
+            # 超时可发生在请求抵达服务端之前；其余请求应各一次，重定向未跟随。
+            self.assertEqual([mode for mode in received_modes if mode != "slow"], ["ok", "401", "429", "500", "redirect", "invalid", "large"])
+            self.assertLessEqual(received_modes.count("slow"), 1)
         finally:
             await runner.cleanup()
 
@@ -300,6 +304,7 @@ def load_plugin():
         return attach_filter(lambda event: instance.filter(event, {}))
     modules["astrbot.api.event"].filter = types.SimpleNamespace(command=decorator, regex=regex, custom_filter=custom_filter, CustomFilter=CustomFilter)
     modules["astrbot.api.event"].AstrMessageEvent = object
+    modules["astrbot.api.event"].MessageChain = object
     modules["astrbot.api"].logger = types.SimpleNamespace(warning=lambda text: None)
     class Plain:
         def __init__(self, text):
@@ -320,6 +325,7 @@ def load_plugin():
             self.context = context
     modules["astrbot.api.star"].Star = Star
     modules["astrbot.api.star"].Context = object
+    modules["astrbot.api.star"].StarTools = object
     with patch.dict(sys.modules, modules):
         return importlib.import_module("astrbot_plugin_account_quota.main").AccountQuotaPlugin
 
@@ -365,6 +371,82 @@ class Context:
 
 
 class PluginTests(unittest.IsolatedAsyncioTestCase):
+    async def test_combined_query_skips_each_disabled_source(self):
+        for disabled, active in [("codex", "deepseek"), ("deepseek", "codex")]:
+            plugin = Plugin(Context(), {disabled + "_query_enabled": False})
+            snapshot = quota.Snapshot("active result", time.time())
+            with patch.object(plugin, "_codex_snapshot", return_value=snapshot) as codex, patch.object(plugin, "_deepseek_snapshot", return_value=snapshot) as deepseek:
+                result = await plugin._answer(Event(), "all")
+                mocks = {"codex": codex, "deepseek": deepseek}
+                mocks[disabled].assert_not_awaited()
+                mocks[active].assert_awaited_once()
+                self.assertIn("active result", result)
+                self.assertNotIn("已关闭", result)
+            await plugin.terminate()
+
+    async def test_disabled_command_and_natural_query_never_invoke_sources(self):
+        plugin = Plugin(Context(), {"codex_query_enabled": False, "deepseek_query_enabled": False})
+        with patch.object(plugin, "_codex_snapshot") as codex, patch.object(plugin, "_deepseek_snapshot") as deepseek:
+            for handler, message in [(plugin.quota_command, "额度"), (plugin.codex_command, "codex额度"), (plugin.deepseek_command, "deepseek余额"), (plugin.natural_query, "帮我查一下额度"), (plugin.natural_query, "查一下 Codex 额度"), (plugin.natural_query, "查一下 DeepSeek 余额")]:
+                event = Event(message)
+                await handler(event)
+                self.assertEqual(len(event.sent), 1)
+                self.assertIsInstance(event.sent[0], str)
+                self.assertIn("已关闭喵", event.sent[0])
+                self.assertTrue(event.stopped)
+                self.assertFalse(event.get_extra("astrbot_plugin_account_quota.reminder", False))
+            codex.assert_not_awaited()
+            deepseek.assert_not_awaited()
+        await plugin.terminate()
+
+    async def test_disabled_snapshots_bypass_cached_data_credentials_and_fetch(self):
+        plugin = Plugin(Context())
+        data = {"balance_infos": [{"currency": "CNY", "total_balance": "20", "topped_up_balance": "20", "granted_balance": "0"}]}
+        globals_ = Plugin._codex_snapshot.__globals__
+        codex_data = {"rateLimits": {"secondary": {"windowDurationMins": 10080, "usedPercent": 50, "resetsAt": time.time() + 7 * 86400}}}
+        with patch.dict(globals_, {"fetch_codex": unittest.mock.AsyncMock(return_value=codex_data), "fetch_deepseek": unittest.mock.AsyncMock(return_value=data)}), patch.object(plugin, "_deepseek_key", return_value="test-key") as credentials:
+            self.assertFalse((await plugin._codex_snapshot()).error)
+            self.assertFalse((await plugin._deepseek_snapshot(Event())).error)
+            plugin.config.update(codex_query_enabled=False, deepseek_query_enabled=False)
+            for result in [await plugin._codex_snapshot(), await plugin._codex_snapshot(refresh=True), await plugin._deepseek_snapshot(Event())]:
+                self.assertTrue(result.error)
+                self.assertIn("已关闭喵", result.text)
+                self.assertFalse(result.reminders)
+            credentials.assert_awaited_once()
+            globals_["fetch_codex"].assert_awaited_once()
+            globals_["fetch_deepseek"].assert_awaited_once()
+            plugin.config.update(codex_query_enabled=True, deepseek_query_enabled=True)
+            self.assertFalse((await plugin._codex_snapshot()).error)
+            self.assertFalse((await plugin._deepseek_snapshot(Event())).error)
+        await plugin.terminate()
+
+    async def test_deepseek_disabled_during_key_selection_does_not_start_http(self):
+        plugin = Plugin(Context())
+        async def select(event):
+            plugin.config["deepseek_query_enabled"] = False
+            return "test-key"
+        with patch.object(plugin, "_deepseek_key", side_effect=select), patch.dict(Plugin._deepseek_snapshot.__globals__, {"fetch_deepseek": unittest.mock.AsyncMock()}) as globals_:
+            result = await plugin._deepseek_snapshot(Event())
+            self.assertIn("已关闭喵", result.text)
+            globals_["fetch_deepseek"].assert_not_awaited()
+        await plugin.terminate()
+
+    async def test_codex_disabled_while_waiting_for_read_lock_never_starts_process(self):
+        plugin = Plugin(Context())
+        await plugin._codex_read_lock.acquire()
+        with patch.dict(Plugin._codex_snapshot.__globals__, {"fetch_codex": unittest.mock.AsyncMock()}) as globals_:
+            reading = asyncio.create_task(plugin._codex_snapshot())
+            try:
+                await asyncio.sleep(0.01)
+                self.assertTrue(plugin.cache._pending)
+                plugin.config["codex_query_enabled"] = False
+            finally:
+                plugin._codex_read_lock.release()
+            result = await reading
+            self.assertIn("已关闭喵", result.text)
+            globals_["fetch_codex"].assert_not_awaited()
+        await plugin.terminate()
+
     async def test_usd_toggle_does_not_reuse_wrong_display_cache(self):
         plugin = Plugin(Context())
         data = {"balance_infos": [{"currency": "CNY", "total_balance": "20", "granted_balance": "0", "topped_up_balance": "20"}, {"currency": "USD", "total_balance": "2.5", "granted_balance": "0", "topped_up_balance": "2.5"}]}
