@@ -13,9 +13,12 @@ from test_quota import Event, Plugin, Context
 from astrbot_plugin_account_quota import reset_monitor as reset
 
 
-def forecast(p24=40, signal=None, p48=None):
+def forecast(p24=40, signal=None, p48=None, signal_probability=None):
+    probabilities = {"rounded_24h": p24, "rounded_48h": p24 if p48 is None else p48}
+    if signal_probability is not None:
+        probabilities["signal_percent"] = signal_probability
     return reset.Forecast.parse({
-        "probabilities": {"rounded_24h": p24, "rounded_48h": p24 if p48 is None else p48},
+        "probabilities": probabilities,
         "confidence": "medium", "last_reset_at": "2026-10-01T00:00:00Z",
         "age_days": 1, "official_signal": signal, "updated_at": "2026-10-02T00:00:00Z",
     })
@@ -27,6 +30,22 @@ def timeline(day=1, event_id=None):
 
 
 class ResetFormatTests(unittest.TestCase):
+    def test_tibo_probability_separate_from_cadence(self):
+        current = forecast(20, {"tweet_id": "tibo", "summary": "Reset by EOD"}, 35, 83)
+        self.assertEqual(current.signal_probability, 83)
+        text = current.render("Asia/Shanghai")
+        for fragment in ("Tibo 信号概率：83%", "未来 24 小时：20%", "未来 48 小时：35%"):
+            self.assertIn(fragment, text)
+
+    def test_optional_tibo_probability_does_not_break_legacy_or_invalid_data(self):
+        for value in (None, True, "83", -1, 101, 10**400, float("nan"), float("inf")):
+            with self.subTest(value=value):
+                current = forecast(20, {"id": "signal"}, 35, value)
+                self.assertIsNone(current.signal_probability)
+                self.assertEqual((current.p24, current.p48), (20, 35))
+        for signal in (None, {"active": False, "id": "expired"}):
+            self.assertIsNone(forecast(20, signal, 35, 93).signal_probability)
+
     def test_forecast_percentages_timezone_credit(self):
         text = reset.credited(forecast().render("Asia/Shanghai"))
         local_time = reset.datetime.fromtimestamp(reset.timestamp("2026-10-02T00:00:00Z")).strftime("%Y-%m-%d %H:%M:%S")
@@ -83,6 +102,68 @@ class MonitorTests(unittest.IsolatedAsyncioTestCase):
 
     def evaluate(self, p=40, events=None, now=100000, signal=None):
         return self.monitor._evaluate(forecast(p, signal), reset.confirmed_events(events or timeline()), now)
+
+    def test_tibo_83_crosses_threshold_with_low_cadence_and_93_upgrades(self):
+        self.evaluate(20)
+        events = reset.confirmed_events(timeline())
+        signal = {"tweet_id": "tibo", "summary": "Reset by EOD"}
+        current = forecast(20, signal, 35, 83)
+        messages = self.monitor._evaluate(current, events, 100001)
+        self.assertEqual(len(messages), 1)
+        self.assertIn("83% 提醒档位", messages[0])
+        self.assertIn("Tibo 信号概率：83%", messages[0])
+        self.assertIn("尚未确认到账", messages[0])
+        self.assertEqual(self.monitor._evaluate(current, events, 100002), [])
+        messages = self.monitor._evaluate(forecast(20, signal, 35, 93), events, 100003)
+        self.assertEqual(len(messages), 1)
+        self.assertIn("Strong Watch", messages[0])
+        self.monitor._evaluate(forecast(20, signal, 35, 74), events, 100004)
+        self.assertEqual(self.monitor._evaluate(current, events, 100005), [])
+        self.monitor._evaluate(forecast(20, signal, 35, 74), events, 121603)
+        self.assertEqual(len(self.monitor._evaluate(current, events, 121604)), 1)
+
+    def test_tibo_high_initial_baseline_and_below_threshold_stay_quiet(self):
+        events = reset.confirmed_events(timeline())
+        signal = {"id": "signal", "summary": "maybe"}
+        self.assertEqual(self.monitor._evaluate(forecast(20, signal, 35, 83), events, 100000), [])
+        self.assertEqual(self.monitor._evaluate(forecast(20, signal, 35, 83), events, 100001), [])
+        self.assertEqual(self.monitor._evaluate(forecast(20, {"id": "low"}, 35, 74), events, 100002), [])
+
+    def test_upgrade_recognizes_probability_of_previously_seen_signal(self):
+        events = reset.confirmed_events(timeline())
+        signal = {"tweet_id": "existing", "summary": "already seen by old version"}
+        self.monitor._evaluate(forecast(20, signal, 35), events, 100000)
+        messages = self.monitor._evaluate(forecast(20, signal, 35, 83), events, 100001)
+        self.assertEqual(len(messages), 1)
+        self.assertIn("83% 提醒档位", messages[0])
+
+    def test_confirmed_tibo_probability_cannot_emit_unconfirmed_alert(self):
+        self.evaluate(20)
+        signal = {"id": "2", "summary": "confirmed"}
+        current = forecast(20, signal, 35, 93)
+        messages = self.monitor._evaluate(current, reset.confirmed_events(timeline(2)), 100001)
+        self.assertEqual(len(messages), 1)
+        self.assertTrue(messages[0].startswith("✅"))
+        self.assertEqual(self.monitor._evaluate(current, None, 100002), [])
+        self.assertEqual(self.monitor.state["last_probability_level"], 0)
+
+    async def test_tibo_signal_toggle_only_suppresses_standalone_alerts(self):
+        await self.monitor.subscribe("muted", True)
+        await self.monitor.subscribe("enabled", True)
+        await self.monitor.set_signal_notification("muted", False)
+        self.evaluate(20)
+        current = forecast(20, {"id": "first", "summary": "first promise"}, 35, 83)
+        async def get(endpoint):
+            return current if endpoint == "forecast" else reset.confirmed_events(timeline())
+        self.monitor.api.get = get
+        await self.monitor.poll()
+        self.assertEqual({origin for origin, _ in self.sent}, {"muted", "enabled"})
+        current = forecast(20, {"id": "second", "summary": "new promise"}, 35, 83)
+        await self.monitor.poll()
+        self.assertEqual(len(self.sent), 3)
+        self.assertEqual(self.sent[-1][0], "enabled")
+        self.assertTrue(self.sent[-1][1].startswith("⚠️ Codex 新官方信号"))
+        self.assertIn("Tibo 信号概率：83%", self.sent[-1][1])
 
     def test_first_boot_and_crossings(self):
         self.assertEqual(self.evaluate(40), [])
@@ -409,7 +490,7 @@ class APITests(unittest.IsolatedAsyncioTestCase):
                 values = await asyncio.gather(*(api.get("forecast") for _ in range(10)))
                 self.assertTrue(all(value.p24 == 50 for value in values))
                 self.assertEqual(len(hits), 1)
-                self.assertIn("astrbot-plugin-account-quota/1.4.4", hits[0][1])
+                self.assertIn("astrbot-plugin-account-quota/1.4.6", hits[0][1])
                 for current in ("429", "date", "500", "json", "missing", "redirect", "large"):
                     mode = current
                     api.next_request["forecast"] = 0

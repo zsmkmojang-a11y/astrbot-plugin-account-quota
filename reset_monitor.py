@@ -16,9 +16,11 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import aiohttp
 
+from .public_status import BANKED_LABELS, ServiceStatus, banked_updates
+
 SOURCE = "https://codex-reset.com/"
 CREDIT = "Data: codex-reset.com"
-USER_AGENT = "astrbot-plugin-account-quota/1.4.4 (+https://github.com/zsmkmojang-a11y/astrbot-plugin-account-quota)"
+USER_AGENT = "astrbot-plugin-account-quota/1.4.6 (+https://github.com/zsmkmojang-a11y/astrbot-plugin-account-quota)"
 
 
 class ResetError(Exception):
@@ -98,6 +100,7 @@ class Forecast:
     updated_at: str
     signal_id: str
     signal_text: str
+    signal_probability: float | None = None
 
     @classmethod
     def parse(cls, data):
@@ -116,16 +119,31 @@ class Forecast:
                 age = number(age)
             timestamp(data["updated_at"])
             signal_id, signal_text = signal_info(data["official_signal"])
-            return cls(p24, p48, confidence, last, age, data["updated_at"], signal_id, signal_text)
+            signal_probability = None
+            if signal_id:
+                # 来源站的 Tibo 标题概率独立于历史 24h/48h。此扩展字段
+                # 未纳入稳定接口契约，缺失或异常时仍保留历史模型查询。
+                try:
+                    signal_probability = number(probabilities.get("signal_percent"), 0, 100)
+                except (ResetError, OverflowError):
+                    pass
+            return cls(p24, p48, confidence, last, age, data["updated_at"], signal_id, signal_text, signal_probability)
         except (KeyError, TypeError) as exc:
             raise ResetError("Reset 接口字段不完整或格式异常，请稍后重试。") from exc
+
+    def probability_text(self, include_signal: bool = True) -> str:
+        lines = []
+        if include_signal and self.signal_probability is not None:
+            lines.append(f"· Tibo 信号概率：{self.signal_probability:g}%")
+        lines.extend((f"· 未来 24 小时：{self.p24:g}%", f"· 未来 48 小时：{self.p48:g}%"))
+        return "\n".join(lines)
 
     def render(self, zone: str) -> str:
         last = display_time(self.last_reset_at, zone) if self.last_reset_at else "未知"
         age = f"{self.age_days:g} 天" if self.age_days is not None else "未知"
         confidence = {"low": "低", "medium": "中", "high": "高"}[self.confidence]
         return (f"Codex 全局 Reset 预测\n"
-                f"· 未来 24 小时：{self.p24:g}%\n· 未来 48 小时：{self.p48:g}%\n"
+                f"{self.probability_text()}\n"
                 f"· 置信度：{confidence}\n· 距上次 Reset：{age}\n"
                 f"· 上次 Reset：{last}\n· 官方信号：{self.signal_text}\n"
                 f"· 更新时间：{display_time(self.updated_at, zone)}\n\n"
@@ -152,6 +170,9 @@ def confirmed_events(data) -> list[ResetEvent]:
             raise ResetError("Reset 历史接口事件格式异常，请稍后重试。")
         if item.get("group") != "reset" or item.get("announcement_state") != "announced":
             continue
+        banked_state = item.get("banked_state")
+        if (isinstance(banked_state, str) and banked_state in BANKED_LABELS) or item.get("banked_grant") is True:
+            continue
         try:
             event_id = item["id"]
             if isinstance(event_id, bool) or not isinstance(event_id, (str, int)) or not str(event_id).strip():
@@ -166,13 +187,26 @@ def confirmed_events(data) -> list[ResetEvent]:
     return sorted(events.values(), key=lambda event: (timestamp(event.announced_at), event.id), reverse=True)
 
 
+class TimelineEvents(list):
+    """保留正式 Reset 列表接口，同时携带独立的重置卡动态。"""
+
+    def __init__(self, events, banked):
+        super().__init__(events)
+        self.banked = banked
+
+
+def parse_timeline(data):
+    events = confirmed_events(data)
+    return TimelineEvents(events, banked_updates(data, timestamp, safe_text, ResetError))
+
+
 class ResetAPI:
     """端点级串行化与 60 秒缓存，手动查询也遵守 Retry-After。"""
 
     def __init__(self, zone="Asia/Shanghai"):
         self.zone = zone
         self.session: aiohttp.ClientSession | None = None
-        self.locks = {name: asyncio.Lock() for name in ("forecast", "timeline")}
+        self.locks = {name: asyncio.Lock() for name in ("forecast", "timeline", "status-history")}
         self.next_request: dict[str, float] = {}
         self.cache: dict[str, object] = {}
         self.errors: dict[str, str] = {}
@@ -187,7 +221,10 @@ class ResetAPI:
                 if endpoint in self.errors:
                     raise ResetError(self.errors[endpoint])
                 if endpoint in self.cache:
-                    return self.cache[endpoint]
+                    value = self.cache[endpoint]
+                    if isinstance(value, ServiceStatus) and not value.is_fresh(timestamp):
+                        raise ResetError("Codex 服务状态缓存已过期，请稍后重试。")
+                    return value
                 raise ResetError("Reset 本轮请求未完成，请稍后重试。")
             self.next_request[endpoint] = now + 60
             if self.session is None:
@@ -218,7 +255,12 @@ class ResetAPI:
                         if len(payload) > 2 * 1024 * 1024:
                             raise ResetError("Reset 数据源响应过大，请稍后重试。")
                     data = json.loads(payload)
-                    value = Forecast.parse(data) if endpoint == "forecast" else confirmed_events(data)
+                    if endpoint == "forecast":
+                        value = Forecast.parse(data)
+                    elif endpoint == "timeline":
+                        value = parse_timeline(data)
+                    else:
+                        value = ServiceStatus.parse(data, timestamp, safe_text)
                 self.cache[endpoint] = value
                 self.errors.pop(endpoint, None)
                 return value
@@ -274,6 +316,9 @@ class ResetMonitor:
             "last_probability_level": 0, "last_probability_notify_time": 0,
             "probability_notify_times": {}, "timeline_initialized": False,
             "forecast_initialized": False, "pending": {}, "signal_preferences": {}, "pending_account_refresh_id": "",
+            "banked_initialized": False, "seen_banked_keys": [], "last_banked_at": 0,
+            "service_initialized": False, "service_degraded": False, "service_checked_at": 0,
+            "service_observed_at": 0,
         }
         self.lock = asyncio.Lock()
         self.task: asyncio.Task | None = None
@@ -289,6 +334,9 @@ class ResetMonitor:
             # v1.3.0 没有会话信号偏好，保留既有订阅与游标并补充默认值。
             data.setdefault("signal_preferences", {})
             data.setdefault("pending_account_refresh_id", "")
+            for key in ("banked_initialized", "seen_banked_keys", "last_banked_at",
+                        "service_initialized", "service_degraded", "service_checked_at", "service_observed_at"):
+                data.setdefault(key, copy.deepcopy(self.state[key]))
             for key in self.state:
                 expected = type(self.state[key])
                 matches = isinstance(data.get(key), (int, float)) and not isinstance(data.get(key), bool) if expected is int else type(data.get(key)) is expected
@@ -301,9 +349,9 @@ class ResetMonitor:
                 raise ValueError("signal preferences")
             if not all(isinstance(k, str) and isinstance(v, list) and all(isinstance(item, dict) and isinstance(item.get("text"), str) and isinstance(item.get("created_at"), (int, float)) for item in v) for k, v in data["pending"].items()):
                 raise ValueError("pending")
-            for key in ("last_seen_reset_at", "last_probability_level", "last_probability_notify_time"):
+            for key in ("last_seen_reset_at", "last_probability_level", "last_probability_notify_time", "last_banked_at", "service_checked_at", "service_observed_at"):
                 number(data[key])
-            if not all(isinstance(v, str) for v in data["seen_signal_ids"] + data["seen_reset_ids"]):
+            if not all(isinstance(v, str) for v in data["seen_signal_ids"] + data["seen_reset_ids"] + data["seen_banked_keys"]):
                 raise ValueError("signals")
             for v in data["probability_notify_times"].values():
                 number(v)
@@ -375,11 +423,86 @@ class ResetMonitor:
         enabled = self.state["subscriptions"].get(origin, False)
         return (f"Reset 订阅设置\n· 当前会话：{'开启' if enabled else '关闭'}\n"
                 f"· 轮询间隔：{self.interval / 60:g} 分钟\n· 预警线：{' / '.join(str(v) + '%' for v in self.thresholds)}\n"
-                f"· 监测范围：未来 24 / 48 小时，任一达到预警线即提醒\n"
+                f"· 监测范围：Tibo 信号概率及未来 24 / 48 小时，任一达到预警线即提醒\n"
                 f"· 同级提醒冷却：{self.cooldown / 60:g} 分钟\n"
                 f"· 概率提醒：{'开' if self.config.get('probability_warning', True) else '关'}\n"
                 f"· 新官方信号单独提醒：{'开' if self.signal_enabled(origin) else '关'}\n"
-                f"· 确认 Reset 提醒：{'开' if self.config.get('reset_notification', True) else '关'}")
+                f"· 确认 Reset 提醒：{'开' if self.config.get('reset_notification', True) else '关'}\n"
+                f"· 重置卡发放动态：{'开' if self.config.get('banked_notification', True) else '关'}\n"
+                f"· Codex 异常与恢复提醒：{'开' if self.config.get('service_notification', True) else '关'}")
+
+    async def service_notice(self):
+        """查询时只附有效的异常；网络失败、正常状态均不增加回复内容。"""
+        try:
+            status = await self.api.get("status-history")
+            if isinstance(status, ServiceStatus) and status.is_fresh(timestamp):
+                checked = timestamp(status.checked_at)
+                async with self.lock:
+                    if self.closed or checked < max(self.state["service_checked_at"], self.state["service_observed_at"]):
+                        return ""
+                    previous = self.state["service_observed_at"]
+                    if checked > previous:
+                        self.state["service_observed_at"] = checked
+                        try:
+                            await self._save()
+                        except OSError as exc:
+                            self.state["service_observed_at"] = previous
+                            raise ResetError("Codex 服务检查时间保存失败，已暂时隐藏状态。") from exc
+                    return status.render(display_time, self.zone)
+        except ResetError as exc:
+            self.log(f"Codex 服务状态查询失败：{exc}")
+        return ""
+
+    async def query_forecast(self):
+        results = await asyncio.gather(self.api.get("forecast"), self.api.get("timeline"), self.service_notice(), return_exceptions=True)
+        if isinstance(results[0], BaseException):
+            raise results[0]
+        sections = [results[0].render(self.zone)]
+        banked = getattr(results[1], "banked", [])
+        if banked:
+            sections.append(banked[0].render(display_time, self.zone))
+        if isinstance(results[2], str) and results[2]:
+            sections.append(results[2])
+        return "\n\n".join(sections)
+
+    def _evaluate_public(self, events, service):
+        messages = []
+        state = self.state
+        updates = getattr(events, "banked", None)
+        if updates is not None:
+            # 同轮只考察最新公开状态，旧事件回填不抢占当前发卡动态。
+            latest = updates[0] if updates else None
+            if updates and state["banked_initialized"]:
+                if (latest.key not in state["seen_banked_keys"] and timestamp(latest.at) >= state["last_banked_at"]
+                        and self.config.get("banked_notification", True)):
+                    messages.append(latest.render(display_time, self.zone))
+            state["banked_initialized"] = True
+            keys = [item.key for item in updates[:200]]
+            if latest and timestamp(latest.at) >= state["last_banked_at"]:
+                state["last_banked_at"] = timestamp(latest.at)
+                keys += state["seen_banked_keys"]
+            else:
+                keys = state["seen_banked_keys"] + keys
+            state["seen_banked_keys"] = list(dict.fromkeys(keys))[:200]
+        if isinstance(service, ServiceStatus) and service.is_fresh(timestamp):
+            checked = timestamp(service.checked_at)
+            if checked < state["service_observed_at"]:
+                return messages
+            state["service_observed_at"] = checked
+            if not state["service_initialized"] or checked > state["service_checked_at"]:
+                was_degraded = state["service_initialized"] and state["service_degraded"]
+                if self.config.get("service_notification", True):
+                    if service.degraded and not was_degraded:
+                        messages.append(service.render(display_time, self.zone))
+                    elif was_degraded and not service.degraded:
+                        messages.append("🟢 Codex 服务已经恢复啦喵\n"
+                                        f"· 检查时间：{display_time(service.checked_at, self.zone)}\n"
+                                        "· 之前检测到的服务异常已解除，可以继续开蹬了喵。\n"
+                                        "· 官方状态：https://status.openai.com/")
+                state["service_initialized"] = True
+                state["service_degraded"] = service.degraded
+                state["service_checked_at"] = checked
+        return messages
 
     def _evaluate(self, forecast: Forecast | None, events: list[ResetEvent] | None, now: float) -> list[str]:
         messages = []
@@ -401,12 +524,14 @@ class ResetMonitor:
                 if self.config.get("reset_notification", True):
                     messages.append("✅ Codex Reset 已由来源站确认啦喵！\n" + latest.render(self.zone) + "\n\n可以开蹬了喵！\n· 个人账号是否到账，记得查看实际额度喵。")
         if forecast is not None:
-            probability = max(forecast.p24, forecast.p48)
-            level = max((v for v in self.thresholds if probability >= v), default=0)
             signal_id = forecast.signal_id
             # 已由 timeline 确认的同一事件不再降级成“未确认”信号。
             if signal_id in state["seen_reset_ids"] or signal_id == state["last_seen_reset_id"]:
                 signal_id = ""
+            probability = max(forecast.p24, forecast.p48,
+                              forecast.signal_probability if signal_id and forecast.signal_probability is not None else 0)
+            level = max((v for v in self.thresholds if probability >= v), default=0)
+            probability_text = forecast.probability_text(include_signal=bool(signal_id))
             if not state["forecast_initialized"]:
                 state["forecast_initialized"] = True
                 if signal_id:
@@ -417,7 +542,7 @@ class ResetMonitor:
                     state["seen_signal_ids"] = (state["seen_signal_ids"] + [signal_id])[-200:]
                     # 单独信号通知是否发送由各会话开关决定；跨档提醒始终附带信号状态。
                     if level and (self.config.get("signal_notification", True) or any(state["signal_preferences"].values())):
-                        signal_message = "⚠️ Codex 新官方信号喵\n· " + forecast.signal_text + f"\n· 未来 24 小时：{forecast.p24:g}%\n· 未来 48 小时：{forecast.p48:g}%\n\n来源站的信号解读，尚未确认到账喵。"
+                        signal_message = "⚠️ Codex 新官方信号喵\n· " + forecast.signal_text + f"\n{probability_text}\n\n来源站的信号解读，尚未确认到账喵。"
                 previous = state["last_probability_level"]
                 last_notify = state["probability_notify_times"].get(str(level))
                 cooled = last_notify is None or now - last_notify >= self.cooldown
@@ -428,9 +553,11 @@ class ResetMonitor:
                         wording = ("⚠️ 官方很有可能已经说要 Reset 啦，记得核对下面的来源信号喵。"
                                    if signal_id else "⚠️ 已达到官方信号预警档位，不过接口暂时没有官方信号喵。")
                     else:
-                        wording = "📈 距离上次重置已经有点久啦，未来很有可能会重置喵。"
+                        wording = ("📈 Tibo 信号概率已经达到预警线，未来很有可能会重置喵。"
+                                   if signal_id and forecast.signal_probability is not None and forecast.signal_probability >= level
+                                   else "📈 距离上次重置已经有点久啦，未来很有可能会重置喵。")
                     signal_note = ("官方信号：" + forecast.signal_text) if signal_id else "当前无活跃官方信号，概率预警不代表官方已经表态或给出日期喵。"
-                    messages.append(f"Codex Reset 预测达到 {level}% 提醒档位喵\n{wording}\n\n· 未来 24 小时：{forecast.p24:g}%\n· 未来 48 小时：{forecast.p48:g}%\n· {signal_note}\n\n第三方预测与信号解读，尚未确认到账喵。")
+                    messages.append(f"Codex Reset 预测达到 {level}% 提醒档位喵\n{wording}\n\n{probability_text}\n· {signal_note}\n\n第三方预测与信号解读，尚未确认到账喵。")
                     signal_message = None  # 同轮信号与跨档提醒合并，避免双重预警。
                     # 一次跃过多个档位后，冷却也覆盖被跨过的较低档位。
                     for threshold in self.thresholds:
@@ -446,7 +573,7 @@ class ResetMonitor:
         return confirmations or messages
 
     async def poll(self):
-        results = await asyncio.gather(self.api.get("forecast"), self.api.get("timeline"), return_exceptions=True)
+        results = await asyncio.gather(self.api.get("forecast"), self.api.get("timeline"), self.api.get("status-history"), return_exceptions=True)
         for result in results:
             if isinstance(result, Exception):
                 self.log(f"Reset 轮询失败：{result}")
@@ -458,6 +585,13 @@ class ResetMonitor:
             previous = copy.deepcopy(self.state)
             now = time.time()
             messages = self._evaluate(forecast, events, now)
+            service = results[2] if isinstance(results[2], ServiceStatus) else None
+            if service is not None and (
+                not service.is_fresh(timestamp)
+                or timestamp(service.checked_at) < max(self.state["service_checked_at"], self.state["service_observed_at"])
+            ):
+                service = None
+            messages.extend(self._evaluate_public(events, service))
             if self.on_confirm and previous["timeline_initialized"] and self.state["last_seen_reset_id"] != previous["last_seen_reset_id"]:
                 self.state["pending_account_refresh_id"] = self.state["last_seen_reset_id"]
             for text in messages:
@@ -467,7 +601,11 @@ class ResetMonitor:
                             continue
                         queue = self.state["pending"].setdefault(origin, [])
                         if text.startswith("✅"):
-                            queue[:] = [item for item in queue if item["text"].startswith("✅")]
+                            queue[:] = [item for item in queue if not item["text"].startswith(("Codex Reset 预测", "⚠️ Codex 新官方信号"))]
+                        if text.startswith("🎟️"):
+                            queue[:] = [item for item in queue if not item["text"].startswith("🎟️")]
+                        if text.startswith(("⚠️ Codex 服务", "🟢 Codex 服务")):
+                            queue[:] = [item for item in queue if not item["text"].startswith(("⚠️ Codex 服务", "🟢 Codex 服务"))]
                         queue.append({"text": credited(text), "created_at": now})
                         del queue[:-20]
             try:
@@ -478,12 +616,26 @@ class ResetMonitor:
                 raise
             # 分会话处理，失败会话不影响其他订阅；最多保留一天并每轮重试。
             for origin, queue in list(self.state["pending"].items()):
-                while queue:
+                remaining = len(queue)
+                while queue and remaining:
+                    remaining -= 1
                     item = queue[0]
                     muted_signal = item["text"].startswith("⚠️ Codex 新官方信号") and not self.signal_enabled(origin)
-                    if not self.state["subscriptions"].get(origin) or muted_signal or now - item["created_at"] > 86400:
+                    muted_public = (
+                        item["text"].startswith("🎟️") and not self.config.get("banked_notification", True)
+                        or item["text"].startswith(("⚠️ Codex 服务", "🟢 Codex 服务")) and not self.config.get("service_notification", True)
+                    )
+                    outdated_service = (
+                        item["text"].startswith("⚠️ Codex 服务") and not self.state["service_degraded"]
+                        or item["text"].startswith("🟢 Codex 服务") and self.state["service_degraded"]
+                    )
+                    if not self.state["subscriptions"].get(origin) or muted_signal or muted_public or outdated_service or now - item["created_at"] > 86400:
                         queue.pop(0)
                         await self._save()
+                        continue
+                    if service is None and item["text"].startswith(("⚠️ Codex 服务", "🟢 Codex 服务")):
+                        # 状态源失效时暂缓服务通知，其他 Reset/发卡消息继续发送。
+                        queue.append(queue.pop(0))
                         continue
                     try:
                         async with asyncio.timeout(15):

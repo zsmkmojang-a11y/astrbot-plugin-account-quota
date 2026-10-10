@@ -379,15 +379,23 @@ class IntegrationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_public_reset_query_continues_with_personal_query_disabled(self):
         plugin = Plugin(Context(), {"codex_query_enabled": False})
-        api = types.SimpleNamespace(get=unittest.mock.AsyncMock(return_value=forecast()))
-        plugin.reset_monitor = types.SimpleNamespace(api=api, zone="Asia/Shanghai")
-        event = Event(message="codex-reset")
-        await plugin.reset_command(event)
-        api.get.assert_awaited_once_with("forecast")
-        self.assertIn("Data: codex-reset.com", event.sent[0])
-        self.assertNotIn("查询已关闭", event.sent[0])
-        plugin.reset_monitor = None
-        await plugin.terminate()
+        with tempfile.TemporaryDirectory() as tmp:
+            monitor = reset.ResetMonitor(Path(tmp) / "state.json", {}, None, lambda text: None)
+            plugin.reset_monitor = monitor
+            async def get(endpoint):
+                if endpoint == "forecast": return forecast()
+                if endpoint == "timeline": return reset.parse_timeline(timeline())
+                raise reset.ResetError("status unavailable")
+            monitor.api.get = unittest.mock.AsyncMock(side_effect=get)
+            try:
+                event = Event(message="codex-reset")
+                await plugin.reset_command(event)
+                self.assertEqual({call.args[0] for call in monitor.api.get.await_args_list}, {"forecast", "timeline", "status-history"})
+                self.assertIn("Data: codex-reset.com", event.sent[0])
+                self.assertNotIn("查询已关闭", event.sent[0])
+                self.assertNotIn("Codex 服务", event.sent[0])
+            finally:
+                await plugin.terminate()
 
     async def test_slow_old_query_cannot_overwrite_new_reset_read(self):
         with tempfile.TemporaryDirectory() as tmp:

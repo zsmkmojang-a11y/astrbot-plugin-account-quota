@@ -105,22 +105,22 @@
     "description": "Reset 概率阈值提醒",
     "type": "bool",
     "default": true,
-    "hint": "同时检查 24h / 48h，任一达到阈值且向上跨档时提醒；低于 75% 的默认普通预测不推送。"
+    "hint": "同时检查 24h / 48h 历史概率和有效 Tibo 信号概率，任一达到阈值且向上跨档时提醒；默认低于 75% 不推送。"
   },
   "threshold_1": {
-    "description": "Reset 24h / 48h 预警阈值 1（%）",
+    "description": "Reset 概率预警阈值 1（%）",
     "type": "int",
     "default": 75,
     "hint": "不建议修改：推荐保持 75%、83%、93% 三档，修改可能改变提醒频率和档位含义。有效范围 1–100；三个阈值自动排序、去重。"
   },
   "threshold_2": {
-    "description": "Reset 24h / 48h 预警阈值 2（%）",
+    "description": "Reset 概率预警阈值 2（%）",
     "type": "int",
     "default": 83,
     "hint": "不建议修改：推荐保持 75%、83%、93% 三档，修改可能改变提醒频率和档位含义。有效范围 1–100；三个阈值自动排序、去重。"
   },
   "threshold_3": {
-    "description": "Reset 24h / 48h 预警阈值 3（%）",
+    "description": "Reset 概率预警阈值 3（%）",
     "type": "int",
     "default": 93,
     "hint": "不建议修改：推荐保持 75%、83%、93% 三档，修改可能改变提醒频率和档位含义。有效范围 1–100；三个阈值自动排序、去重。"
@@ -148,6 +148,18 @@
     "type": "bool",
     "default": true,
     "hint": "仅 timeline 中 group=reset 且 announcement_state=announced 的新记录；首次运行只建立历史基线。"
+  },
+  "banked_notification": {
+    "description": "重置卡发放动态提醒",
+    "type": "bool",
+    "default": true,
+    "hint": "随 /codex-reset watch 订阅提醒已宣布发放、正在发放和来源报告到账等动态，与概率阈值独立。首次只建立基线，不补发历史；发卡不会直接刷新个人额度。"
+  },
+  "service_notification": {
+    "description": "Codex 服务异常与恢复提醒",
+    "type": "bool",
+    "default": true,
+    "hint": "随 /codex-reset watch 订阅，在检测到 Codex 异常及随后恢复时各提醒一次。关闭只停止主动推送；查询仅在异常时附服务状态，正常或状态查询失败时不显示。"
   },
   "poll_interval": {
     "description": "旧版轮询秒数（升级兼容，无需修改）",

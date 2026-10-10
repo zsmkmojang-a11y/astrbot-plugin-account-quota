@@ -202,7 +202,7 @@ class AccountQuotaPlugin(Star):
         if extra or len(tokens) > 2:
             return "Reset 指令用法\n· 预测：/codex-reset\n· 历史：/codex-reset history 5，条数可选 1–20\n· 订阅：/codex-reset watch on|off|status\n· 信号提醒：/codex-reset signal on|off|status"
         if not action:
-            return (await monitor.api.get("forecast")).render(monitor.zone)
+            return await monitor.query_forecast()
         if action == "history":
             try:
                 count = int(option) if option else 5
@@ -368,7 +368,11 @@ class AccountQuotaPlugin(Star):
             if target == "deepseek":
                 return "DeepSeek 余额查询已关闭喵。"
             return "Codex 额度和 DeepSeek 余额查询都已关闭喵。"
+        service_requested = "Codex" in names and self.reset_monitor is not None
+        if service_requested:
+            jobs.append(self.reset_monitor.service_notice())
         results = await asyncio.gather(*jobs, return_exceptions=True)
+        notice = results.pop() if service_requested else ""
         rendered = []
         reminder_texts = {
             name: self._text(name + "_reply", default)
@@ -381,6 +385,8 @@ class AccountQuotaPlugin(Star):
                 rendered.append(render_snapshot(name, result, reminder_texts))
                 if not result.error and result.reminders:
                     event.set_extra("astrbot_plugin_account_quota.reminder", True)
+        if isinstance(notice, str) and notice:
+            rendered.append(credited(notice))
         return "\n\n".join(rendered)
 
     def _reminder_image(self):
