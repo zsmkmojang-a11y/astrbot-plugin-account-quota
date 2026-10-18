@@ -23,6 +23,18 @@
     "default": true,
     "hint": "关闭后不读取 DeepSeek 提供商凭据，也不调用余额接口。/额度 汇总会跳过关闭的来源；单独查询时提示已关闭。"
   },
+  "antigravity_query_enabled": {
+    "description": "启用反重力额度查询",
+    "type": "bool",
+    "default": false,
+    "hint": "默认关闭；关闭时不检测或调用 agy。开启后加入 /额度、/mytoken 和 mtk 汇总。须在 AstrBot 所在系统用户下安装并登录官方 agy CLI 1.1.11+。"
+  },
+  "antigravity_path": {
+    "description": "反重力 CLI 程序路径",
+    "type": "string",
+    "default": "agy",
+    "hint": "只填原生程序路径，不填参数。默认查找 PATH，Windows 也检查官方默认安装位置。"
+  },
   "codex_path": {
     "description": "Codex 程序路径",
     "type": "string",

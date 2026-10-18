@@ -13,6 +13,7 @@ from astrbot.api.star import Context, Star, StarTools
 
 from .reset_monitor import ResetError, ResetMonitor, bounded_int, credited
 from .alarm_monitor import AlarmError, AlarmMonitor
+from .antigravity import fetch_antigravity
 
 from .quota import (
     NATURAL_PATTERN,
@@ -255,7 +256,9 @@ class AccountQuotaPlugin(Star):
         return value.strip() if isinstance(value, str) else default
 
     def _query_enabled(self, source):
-        return self.config.get(source + "_query_enabled", True) is not False
+        if source == "antigravity":
+            return self.config.get("antigravity_query_enabled", False) is True
+        return self.config.get(source + "_query_enabled", source != "antigravity") is not False
 
     def _seconds(self, name, default, minimum, maximum):
         value = self.config.get(name, default)
@@ -351,6 +354,17 @@ class AccountQuotaPlugin(Star):
         cache_key = "deepseek:" + credential_fingerprint(key) + (":usd" if show_usd else ":cny")
         return await self.cache.get(cache_key, load, self._seconds("cache_seconds", 30, 0, 300))
 
+    async def _antigravity_snapshot(self):
+        if not self._query_enabled("antigravity"):
+            return Snapshot("反重力额度查询已关闭喵。", time.time(), True)
+        command = self._text("antigravity_path", "agy")
+        async def load():
+            if not self._query_enabled("antigravity"):
+                raise QueryError("反重力额度查询已关闭喵。")
+            return await fetch_antigravity(command, self._seconds("query_timeout_seconds", 20, 3, 120))
+        return await self.cache.get("antigravity:" + credential_fingerprint(command), load,
+                                    self._seconds("cache_seconds", 30, 0, 300))
+
     async def _answer(self, event, target):
         event.set_extra("astrbot_plugin_account_quota.reminder", False)
         if self.config.get("admin_only", True) and not event.is_admin():
@@ -362,7 +376,12 @@ class AccountQuotaPlugin(Star):
         if target in ("all", "deepseek") and self._query_enabled("deepseek"):
             names.append("DeepSeek")
             jobs.append(self._deepseek_snapshot(event))
+        if target in ("all", "antigravity") and self._query_enabled("antigravity"):
+            names.append("Antigravity")
+            jobs.append(self._antigravity_snapshot())
         if not jobs:
+            if target == "antigravity":
+                return "反重力额度查询已关闭喵。"
             if target == "codex":
                 return "Codex 额度查询已关闭喵。"
             if target == "deepseek":
@@ -429,6 +448,20 @@ class AccountQuotaPlugin(Star):
     async def quota_command(self, event: AstrMessageEvent):
         """查询 Codex 额度和 DeepSeek 余额。"""
         await self._respond(event, "all")
+
+    @filter.regex(r"(?i)^\s*mtk\s*$", priority=100)
+    async def mtk_shortcut(self, event: AstrMessageEvent):
+        """完整消息 mtk 可直接唤醒查询，仍沿用管理员限制。"""
+        if event.get_message_str().strip().lower() == "mtk":
+            await self._respond(event, "all")
+
+    @filter.command("反重力额度", priority=100)
+    async def antigravity_command(self, event: AstrMessageEvent):
+        await self._respond(event, "antigravity")
+
+    @filter.command("agy额度", priority=100)
+    async def agy_command(self, event: AstrMessageEvent):
+        await self._respond(event, "antigravity")
 
     @filter.command("mytoken", priority=100)
     async def mytoken_command(self, event: AstrMessageEvent):

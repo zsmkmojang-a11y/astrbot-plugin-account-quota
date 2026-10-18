@@ -339,3 +339,19 @@ python -B -m unittest discover -s tests -v
 - [AstrBot v4.28.1 提供商接口](https://github.com/AstrBotDevs/AstrBot/blob/v4.28.1/astrbot/core/star/context.py)
 - [Codex App Server](https://learn.chatgpt.com/docs/app-server)
 - [DeepSeek 官方余额查询](https://api-docs.deepseek.com/zh-cn/api/get-user-balance/)
+
+
+## 反重力 Antigravity 额度查询
+
+默认关闭，在插件配置中开启 `antigravity_query_enabled` 后才读取。
+
+1. 在运行 AstrBot 的系统用户下安装 [Google 官方 agy CLI](https://github.com/google-antigravity/antigravity-cli)，版本须为 1.1.11 或更新。
+2. 在终端运行 `agy`，完成 Google 登录。若 AstrBot 运行在 Docker 或另一台机器，需要在对应环境内安装和登录。
+3. 设置 `antigravity_path`，默认 `agy`；Windows 会额外检查官方安装位置 `%LOCALAPPDATA%/agy/bin/agy.exe`。也可填写原生程序完整路径，不填写参数。
+4. 开启查询开关并重载插件，用 `/反重力额度` 或 `/agy额度` 查询。
+
+开启后，`/额度`、`/mytoken`、整条消息 `mtk` 以及“帮我查一下额度”会汇总反重力。也可唤醒机器人后说“帮我查一下反重力额度”。`mtk` 不需要斜杠、唤醒词或 @，只匹配完整消息（忽略大小写和两端空白），仍受管理员限制；自然语言查询继续遵循唤醒设置。
+
+插件固定执行 `agy --print /usage --output-format json`，不向模型提问，按 CLI 实际返回的模型组和额度窗口显示剩余比例与本机时间的刷新日期。缺失数值显示未知，不推算总 token 数；不支持的格式报兼容错误。旧版本在查询前拒绝执行。超时与缓存复用现有配置；未登录、网络失败不影响其他来源。关闭开关后完全跳过该来源，不调用 CLI，也不从旧缓存展示反重力数据。
+
+该功能不添加后台轮询或刷新闹钟。额度 JSON 的具体字段尚需兼容不同 CLI 版本；首次部署请核对返回结果。查询使用 CLI 当前登录账号，切换账号后请重新加载插件以清除旧缓存。

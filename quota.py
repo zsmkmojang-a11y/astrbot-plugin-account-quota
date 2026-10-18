@@ -31,7 +31,7 @@ DEFAULT_REMINDER_TEXTS = {
     "codex_card_expiry": CODEX_CARD_EXPIRY,
 }
 _REQUEST = r"(?:(?:请|麻烦你?)(?:\s*)?)?(?:(?:帮我|给我|替我)\s*)?(?:查一下|查下|查询一下|查询|查看一下|查看|看看|查)"
-_PLATFORM = r"(?:codex|deepseek)"
+_PLATFORM = r"(?:codex|deepseek|antigravity|反重力|agy)"
 _SUBJECT = rf"(?:{_PLATFORM}(?:\s*(?:和|与|、|及|\+)\s*{_PLATFORM})?\s*(?:的\s*)?)?"
 _NOUN = r"(?:剩余额度|剩余余额|额度|余额)"
 NATURAL_PATTERN = (
@@ -66,7 +66,7 @@ def natural_target(text: str) -> str | None:
         return None
     if not re.fullmatch(NATURAL_PATTERN, text):
         return None
-    platforms = set(re.findall(_PLATFORM, text.lower()))
+    platforms = {"antigravity" if p in ("antigravity", "反重力", "agy") else p for p in re.findall(_PLATFORM, text.lower())}
     return next(iter(platforms)) if len(platforms) == 1 else "all"
 
 
