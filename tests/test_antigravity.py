@@ -9,6 +9,16 @@ if mod is None:
  import importlib
  mod=importlib.import_module(fetch.__module__)
 class Tests(unittest.IsolatedAsyncioTestCase):
+ def test_windows_default_path_when_environment_is_redirected(self):
+  if mod.os.name != 'nt':self.skipTest('Windows path fallback')
+  with tempfile.TemporaryDirectory() as tmp:
+   home=Path(tmp);exe=home/'AppData/Local/agy/bin/agy.exe'
+   exe.parent.mkdir(parents=True);exe.write_bytes(b'fixture')
+   with patch.object(mod.shutil,'which',return_value=None),patch.object(mod.Path,'home',return_value=home),patch.dict(mod.os.environ,LOCALAPPDATA=str(home/'redirected')):
+    self.assertEqual(mod.resolve_agy('agy'),str(exe.resolve()))
+    self.assertEqual(mod.resolve_agy('agy.exe'),str(exe.resolve()))
+    self.assertEqual(mod.resolve_agy('"'+str(exe)+'"'),str(exe.resolve()))
+    with self.assertRaises(Exception):mod.resolve_agy(str(home/'missing.exe'))
  async def test_default_off(self):
   p=Plugin(Context(),{'codex_query_enabled':False,'deepseek_query_enabled':False})
   try:

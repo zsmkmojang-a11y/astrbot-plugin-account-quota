@@ -1,5 +1,7 @@
 # codex额度查询及福利重置预测
 
+更新公告：[v1.4.5 以来的更新记录](CHANGELOG.md)。
+
 支持监测codex和deepseek额度以及重置卡状态和自然刷新时间，预测下次福利重置时间。
 
 ## 安装与前提
@@ -347,7 +349,7 @@ python -B -m unittest discover -s tests -v
 
 1. 在运行 AstrBot 的系统用户下安装 [Google 官方 agy CLI](https://github.com/google-antigravity/antigravity-cli)，版本须为 1.1.11 或更新。
 2. 在终端运行 `agy`，完成 Google 登录。若 AstrBot 运行在 Docker 或另一台机器，需要在对应环境内安装和登录。
-3. 设置 `antigravity_path`，默认 `agy`；Windows 会额外检查官方安装位置 `%LOCALAPPDATA%/agy/bin/agy.exe`。也可填写原生程序完整路径，不填写参数。
+3. 设置 `antigravity_path`，默认 `agy`；Windows 会额外检查官方安装位置 `%LOCALAPPDATA%/agy/bin/agy.exe` 和当前用户目录的 `AppData/Local/agy/bin/agy.exe`，兼容环境变量重定向。也可填写原生程序完整路径，不填写参数。
 4. 开启查询开关并重载插件，用 `/反重力额度` 或 `/agy额度` 查询。
 
 开启后，`/额度`、`/mytoken`、整条消息 `mtk` 以及“帮我查一下额度”会汇总反重力。也可唤醒机器人后说“帮我查一下反重力额度”。`mtk` 不需要斜杠、唤醒词或 @，只匹配完整消息（忽略大小写和两端空白），仍受管理员限制；自然语言查询继续遵循唤醒设置。
@@ -355,3 +357,35 @@ python -B -m unittest discover -s tests -v
 插件固定执行 `agy --print /usage --output-format json`，不向模型提问，按 CLI 实际返回的模型组和额度窗口显示剩余比例与本机时间的刷新日期。缺失数值显示未知，不推算总 token 数；不支持的格式报兼容错误。旧版本在查询前拒绝执行。超时与缓存复用现有配置；未登录、网络失败不影响其他来源。关闭开关后完全跳过该来源，不调用 CLI，也不从旧缓存展示反重力数据。
 
 该功能不添加后台轮询或刷新闹钟。额度 JSON 的具体字段尚需兼容不同 CLI 版本；首次部署请核对返回结果。查询使用 CLI 当前登录账号，切换账号后请重新加载插件以清除旧缓存。
+
+
+## Claude 订阅额度查询
+
+默认关闭，在配置中开启 `claude_query_enabled`。运行 AstrBot 的同一系统用户需要安装 [Anthropic 官方 Claude Code CLI](https://code.claude.com/docs/en/setup) 并执行 `claude auth login` 登录订阅账号。Windows 默认程序路径为 `%USERPROFILE%/.local/bin/claude.exe`；配置 `claude_path` 默认 `claude`，会自动检查该位置，也可填写原生程序完整路径。
+
+- `/claude额度`：单独查询 Claude 订阅额度。
+- 开启后，`/额度`、`/mytoken`、完整消息 `mtk` 和自然语言综合查询会包含 Claude；唤醒后也可说“帮我查一下Claude额度”。沿用管理员权限限制。
+- 回复显示 5 小时、周额度，以及接口实际提供的 Sonnet/Opus 周额度；数值为剩余百分比，时间按 AstrBot 本机时区显示。缺失字段显示未知，不将缺失解释为100%或0%。
+- CLI 没有与 agy 相同的稳定额度 JSON 子命令。本插件执行 `claude auth status --json` 检查登录，然后只读当前 CLI 数据目录 `.credentials.json` 的 OAuth 登录，访问固定的官方 `https://api.anthropic.com/api/oauth/usage`。不执行 `claude -p`，不调用模型；这不是纯 CLI 输出解析，也不是稳定公开 API，字段或服务政策变化时可能需要兼容更新。
+- API Key、Console 账单或中转平台登录不适用此订阅查询。CLI 数据目录遵循 `CLAUDE_CONFIG_DIR`，否则使用当前用户 `.claude`。macOS Keychain 凭据尚未接入，缺少文件时会明确提示，不尝试读取浏览器登录。
+- 成功结果缓存5分钟，与普通查询缓存设置独立；HTTP尝试至少间隔60秒，429遵循 `Retry-After` 并至少等待5分钟，不自动密集重试。401/403提示登录失效或权限不足。接口响应大小有上限，禁止重定向，不显示原始凭据、响应或stderr。
+- 关闭后不检查Claude CLI、不读登录文件，也不展示旧缓存。不添加后台轮询或额度刷新通知；切换CLI账号后重载插件清除旧缓存。
+
+本机安装完成后若显示未登录，请在自己的终端运行：
+
+```powershell
+& "$env:USERPROFILE\.local\bin\claude.exe" auth login
+```
+
+不要将登录口令或Token发到群里。安装后需完成登录，才能核验真实账号额度；未登录时插件返回登录提示，不影响其他来源。
+
+
+### Claude 存活天数
+
+配置 `claude_start_date`，手动填写开始日期，例如 `2026-10-01`。开启 Claude 查询后，`/claude额度`、`mtk` 和综合查询中的 Claude 段落会增加：
+
+```text
+· 我的Claude存活了18天喵。
+```
+
+示例按2026-10-19计算；实际使用运行 AstrBot 主机的日历日期，开始当天为0天，跨日自动更新，不受额度缓存影响。留空隐藏；无效日期或未来日期会提示检查配置。即使额度查询失败，已配置的手动计时仍可显示；关闭Claude查询时不显示。该功能只是手动纪念计时，不检测账号是否被封禁或能否正常使用。

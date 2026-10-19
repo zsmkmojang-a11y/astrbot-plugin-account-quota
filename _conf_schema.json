@@ -35,6 +35,24 @@
     "default": "agy",
     "hint": "只填原生程序路径，不填参数。默认查找 PATH，Windows 也检查官方默认安装位置。"
   },
+  "claude_query_enabled": {
+    "description": "启用 Claude 订阅额度查询",
+    "type": "bool",
+    "default": false,
+    "hint": "默认关闭。通过 Claude CLI 检查登录，再使用该用户的 CLI OAuth 登录读取官方订阅额度接口，不调用模型。开启后加入 /额度、/mytoken、mtk。需 claude auth login；不适用于 API Key 余额。成功结果缓存5分钟，限流遵循冷却。"
+  },
+  "claude_start_date": {
+    "description": "Claude 存活计时开始日期",
+    "type": "string",
+    "default": "",
+    "hint": "手动填写 YYYY-MM-DD，例如 2026-10-01；留空隐藏。开启Claude查询后在回复显示“我的Claude存活了xxx天喵”。按本机日历日期计时，开始当天为0天，跨日自动更新，不检测账号是否正常。"
+  },
+  "claude_path": {
+    "description": "Claude CLI 原生程序路径",
+    "type": "string",
+    "default": "claude",
+    "hint": "可填写 claude.exe 完整路径，不填参数。Windows 默认安装在用户目录 .local/bin/claude.exe。"
+  },
   "codex_path": {
     "description": "Codex 程序路径",
     "type": "string",

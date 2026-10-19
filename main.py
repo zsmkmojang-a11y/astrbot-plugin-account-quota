@@ -14,6 +14,7 @@ from astrbot.api.star import Context, Star, StarTools
 from .reset_monitor import ResetError, ResetMonitor, bounded_int, credited
 from .alarm_monitor import AlarmError, AlarmMonitor
 from .antigravity import fetch_antigravity
+from .claude_quota import ClaudeReader, claude_survival_text
 
 from .quota import (
     NATURAL_PATTERN,
@@ -48,6 +49,7 @@ class AccountQuotaPlugin(Star):
         super().__init__(context)
         self.config = config if hasattr(config, "get") else {}
         self.cache = QueryCache()
+        self.claude_reader = ClaudeReader()
         self._codex_read_lock = asyncio.Lock()
         self._closing = False
         self.reset_monitor = None
@@ -256,8 +258,8 @@ class AccountQuotaPlugin(Star):
         return value.strip() if isinstance(value, str) else default
 
     def _query_enabled(self, source):
-        if source == "antigravity":
-            return self.config.get("antigravity_query_enabled", False) is True
+        if source in ("antigravity", "claude"):
+            return self.config.get(source + "_query_enabled", False) is True
         return self.config.get(source + "_query_enabled", source != "antigravity") is not False
 
     def _seconds(self, name, default, minimum, maximum):
@@ -365,11 +367,23 @@ class AccountQuotaPlugin(Star):
         return await self.cache.get("antigravity:" + credential_fingerprint(command), load,
                                     self._seconds("cache_seconds", 30, 0, 300))
 
+    async def _claude_snapshot(self):
+        if not self._query_enabled("claude"):
+            return Snapshot("Claude 额度查询已关闭喵。", time.time(), True)
+        command = self._text("claude_path", "claude")
+        async def load():
+            if not self._query_enabled("claude"): raise QueryError("Claude 额度查询已关闭喵。")
+            return await self.claude_reader.fetch(command, self._seconds("query_timeout_seconds", 20, 3, 120))
+        return await self.cache.get("claude:" + credential_fingerprint(command), load, 300)
+
     async def _answer(self, event, target):
         event.set_extra("astrbot_plugin_account_quota.reminder", False)
         if self.config.get("admin_only", True) and not event.is_admin():
             return "仅 AstrBot 管理员可以查询账户额度和余额。"
         names, jobs = [], []
+        if target in ("all", "claude") and self._query_enabled("claude"):
+            names.append("Claude")
+            jobs.append(self._claude_snapshot())
         if target in ("all", "codex") and self._query_enabled("codex"):
             names.append("Codex")
             jobs.append(self._codex_snapshot())
@@ -380,13 +394,14 @@ class AccountQuotaPlugin(Star):
             names.append("Antigravity")
             jobs.append(self._antigravity_snapshot())
         if not jobs:
+            if target == "claude": return "Claude 额度查询已关闭喵。"
             if target == "antigravity":
                 return "反重力额度查询已关闭喵。"
             if target == "codex":
                 return "Codex 额度查询已关闭喵。"
             if target == "deepseek":
                 return "DeepSeek 余额查询已关闭喵。"
-            return "Codex 额度和 DeepSeek 余额查询都已关闭喵。"
+            return "当前所有额度和余额查询都已关闭喵。"
         service_requested = "Codex" in names and self.reset_monitor is not None
         if service_requested:
             jobs.append(self.reset_monitor.service_notice())
@@ -404,6 +419,10 @@ class AccountQuotaPlugin(Star):
                 rendered.append(render_snapshot(name, result, reminder_texts))
                 if not result.error and result.reminders:
                     event.set_extra("astrbot_plugin_account_quota.reminder", True)
+            if name == "Claude":
+                survival = claude_survival_text(self._text("claude_start_date"))
+                if survival:
+                    rendered[-1] += "\n" + survival
         if isinstance(notice, str) and notice:
             rendered.append(credited(notice))
         return "\n\n".join(rendered)
@@ -462,6 +481,10 @@ class AccountQuotaPlugin(Star):
     @filter.command("agy额度", priority=100)
     async def agy_command(self, event: AstrMessageEvent):
         await self._respond(event, "antigravity")
+
+    @filter.command("claude额度", priority=100)
+    async def claude_command(self, event: AstrMessageEvent):
+        await self._respond(event, "claude")
 
     @filter.command("mytoken", priority=100)
     async def mytoken_command(self, event: AstrMessageEvent):

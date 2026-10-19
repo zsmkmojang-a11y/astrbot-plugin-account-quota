@@ -14,10 +14,15 @@ from .quota import QueryError, QuotaReport, _time_text
 
 
 def resolve_agy(command):
+    command = os.path.expandvars(os.path.expanduser(command.strip().strip('"')))
     found = shutil.which(command)
-    if not found and command == "agy" and os.name == "nt":
-        candidate = Path(os.environ.get("LOCALAPPDATA", "")) / "agy/bin/agy.exe"
-        found = str(candidate) if candidate.is_file() else None
+    if not found and command.lower() in ("agy", "agy.exe") and os.name == "nt":
+        candidates = []
+        local = os.environ.get("LOCALAPPDATA")
+        if local:
+            candidates.append(Path(local) / "agy/bin/agy.exe")
+        candidates.append(Path.home() / "AppData/Local/agy/bin/agy.exe")
+        found = next((str(path) for path in candidates if path.is_file()), None)
     if not found and Path(command).is_file():
         found = command
     if not found or Path(found).suffix.lower() in (".cmd", ".bat", ".ps1", ".js"):

@@ -31,7 +31,7 @@ DEFAULT_REMINDER_TEXTS = {
     "codex_card_expiry": CODEX_CARD_EXPIRY,
 }
 _REQUEST = r"(?:(?:请|麻烦你?)(?:\s*)?)?(?:(?:帮我|给我|替我)\s*)?(?:查一下|查下|查询一下|查询|查看一下|查看|看看|查)"
-_PLATFORM = r"(?:codex|deepseek|antigravity|反重力|agy)"
+_PLATFORM = r"(?:codex|deepseek|antigravity|反重力|agy|claude)"
 _SUBJECT = rf"(?:{_PLATFORM}(?:\s*(?:和|与|、|及|\+)\s*{_PLATFORM})?\s*(?:的\s*)?)?"
 _NOUN = r"(?:剩余额度|剩余余额|额度|余额)"
 NATURAL_PATTERN = (
